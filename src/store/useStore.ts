@@ -31,7 +31,7 @@ interface UIState {
   theme: Theme
   tab: Tab
   listsMode: ListsMode
-  /** Krónan API access token; kept on this device only. */
+  /** Krónan API access token; cached locally and saved to the user's account when signed in. */
   kronanToken: string | null
   googleConnected: boolean
   googleError: string | null
@@ -164,6 +164,10 @@ export const useStore = create<Store>()(
           const cloud = await db.loadAll()
           if (!cloud) return
           const local = get()
+          // Krónan token: the account copy wins; a token entered before signing in is pushed up.
+          const savedToken = await db.loadKronanToken()
+          if (savedToken) set({ kronanToken: savedToken })
+          else if (local.kronanToken) void db.saveKronanToken(local.kronanToken)
           const cloudEmpty = Object.values(cloud).every((arr) => arr.length === 0)
           const localHasData = local.habits.length > 0 || local.lists.length > 0 || local.goals.length > 0
           if (cloudEmpty && localHasData) {
@@ -187,7 +191,7 @@ export const useStore = create<Store>()(
         signOut: async () => {
           await supabase?.auth.signOut()
           google.clearGoogleCache()
-          set({ ...emptyData, user: null, googleConnected: false, events: [], eventsRange: null })
+          set({ ...emptyData, user: null, googleConnected: false, events: [], eventsRange: null, kronanToken: null })
         },
 
         // ---------------- habits ----------------
@@ -378,7 +382,10 @@ export const useStore = create<Store>()(
 
         // ---------------- meals ----------------
         setListsMode: (listsMode) => set({ listsMode }),
-        setKronanToken: (kronanToken) => set({ kronanToken }),
+        setKronanToken: (kronanToken) => {
+          set({ kronanToken })
+          if (get().user) void db.saveKronanToken(kronanToken)
+        },
         addRecipe: (r) => {
           const recipe: Recipe = { ...r, id: uid(), user_id: uidOf(), created_at: now() }
           set({ recipes: [...get().recipes, recipe] })

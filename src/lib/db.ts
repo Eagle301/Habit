@@ -84,6 +84,23 @@ export const db = {
     await step('recipes', d.recipes)
     await step('meal_plans', d.mealPlans)
   },
+  /** Krónan access token for the signed-in user (null when none is stored or in local-only mode). */
+  async loadKronanToken(): Promise<string | null> {
+    if (!supabase) return null
+    const { data, error } = await supabase.from('kronan_tokens').select('token').maybeSingle()
+    if (error) { console.error('[db] loadKronanToken failed', error); return null }
+    return data?.token ?? null
+  },
+  async saveKronanToken(token: string | null) {
+    if (!supabase) return
+    const { data } = await supabase.auth.getUser()
+    const uid = data.user?.id
+    if (!uid) return
+    const res = token
+      ? await supabase.from('kronan_tokens').upsert({ user_id: uid, token, updated_at: new Date().toISOString() })
+      : await supabase.from('kronan_tokens').delete().eq('user_id', uid)
+    if (res.error) console.error('[db] saveKronanToken failed', res.error)
+  },
   async wipeAll() {
     if (!supabase) return
     const { data } = await supabase.auth.getUser()

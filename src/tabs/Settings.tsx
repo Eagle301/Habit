@@ -190,7 +190,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
               <button className="btn btn-primary btn-sm" onClick={connectKronan} disabled={!kronanInput.trim() || kronanBusy}>{kronanBusy ? 'Checking…' : 'Connect'}</button>
               <a className="text-3 text-xs underline" href="https://kronan.is/kronan-public-api" target="_blank" rel="noreferrer">How to get a token</a>
             </div>
-            <p className="text-3 text-[11px]">{kronan.KRONAN_TOKEN_HELP}. The token stays on this device and is only sent to Krónan through the app’s proxy.</p>
+            <p className="text-3 text-[11px]">{kronan.KRONAN_TOKEN_HELP}. {s.user ? 'The token is saved to your account so it is there when you sign in again, and' : 'The token stays on this device and'} is only sent to Krónan through the app’s proxy.</p>
           </div>
         )}
       </Card>

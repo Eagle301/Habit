@@ -85,9 +85,10 @@ connected, creates a product list in the Krónan app. Actions on the weekly plan
 Krónan's public API (`https://api.kronan.is/api/v1/`) needs a personal access token, created under
 your kronan.is account settings, and sends no CORS headers. The app therefore calls it through
 `/api/kronan/*`: the Vite dev proxy locally and `netlify/functions/kronan.ts` in production. The token is
-stored only in the browser (localStorage) and forwarded as `Authorization: AccessToken <token>`.
-Nothing is stored server-side. Run `supabase/migrations/0002_meals.sql` for the `recipes` and
-`meal_plans` tables.
+forwarded as `Authorization: AccessToken <token>`, cached in the browser (localStorage) and, when signed
+in, saved per user in the `kronan_tokens` table (RLS: owner only) so it is restored on the next sign-in
+or device. Run `supabase/migrations/0002_meals.sql` (recipes, meal plans) and
+`supabase/migrations/0005_kronan_tokens.sql`, or the combined `supabase/schema.sql`.
 
 ## 4. Netlify deploy
 
