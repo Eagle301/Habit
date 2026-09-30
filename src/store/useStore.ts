@@ -8,6 +8,8 @@ import { uid } from '../lib/id'
 import { db, type CloudData } from '../lib/db'
 import { supabase } from '../lib/supabase'
 import * as google from '../lib/google'
+import * as kronan from '../lib/kronan'
+import type { RecipeIngredient } from '../lib/types'
 import { todayKey, weekStart, weekEnd, addDays, ymd } from '../lib/dates'
 
 export interface User {
@@ -81,6 +83,8 @@ interface Actions {
   scheduleBlock: (habit_id: string, date: string, start_time: string, duration_min?: number) => ScheduledBlock
   moveBlock: (id: string, date: string, start_time: string) => void
   deleteBlock: (id: string) => void
+  /** Remove every planned block in the given dates (and their Google events). Returns how many were removed. */
+  clearBlocks: (dates: string[]) => number
 
   // meals
   setListsMode: (m: ListsMode) => void
@@ -360,6 +364,18 @@ export const useStore = create<Store>()(
           }
         },
 
+        clearBlocks: (dates) => {
+          const gone = get().blocks.filter((b) => dates.includes(b.date))
+          if (!gone.length) return 0
+          const ids = new Set(gone.map((b) => b.id))
+          set({ blocks: get().blocks.filter((b) => !ids.has(b.id)), events: get().events.filter((e) => !e.habitBlockId || !ids.has(e.habitBlockId)) })
+          db.remove('scheduled_blocks', [...ids])
+          if (get().googleConnected) {
+            for (const b of gone) if (b.google_event_id) void google.deleteBlockEvent(b.google_event_id).catch((e) => console.warn(e))
+          }
+          return gone.length
+        },
+
         // ---------------- meals ----------------
         setListsMode: (listsMode) => set({ listsMode }),
         setKronanToken: (kronanToken) => set({ kronanToken }),
@@ -397,18 +413,19 @@ export const useStore = create<Store>()(
         },
         addIngredientsToGroceries: (plans) => {
           const { recipes, lists } = get()
-          // Merge identical ingredients across recipes (scaled to the planned servings).
-          const merged = new Map<string, { name: string; qty: number; unit: string; price: number }>()
+          // Merge identical ingredients across recipes (used amounts scaled to the planned servings),
+          // then round each up to whole packages.
+          const merged = new Map<string, { ing: RecipeIngredient; amount: number }>()
           for (const p of plans) {
             const r = recipes.find((x) => x.id === p.recipe_id)
             if (!r) continue
             const scale = p.servings / Math.max(1, r.servings)
-            for (const ing of r.ingredients) {
-              const key = `${ing.name.toLowerCase()}|${ing.unit}`
+            for (const raw of r.ingredients) {
+              const ing = kronan.normalizeIngredient(raw)
+              const key = ing.sku ?? `${ing.name.toLowerCase()}|${ing.unit}`
               const cur = merged.get(key)
-              const qty = Math.round(ing.qty * scale * 100) / 100
-              if (cur) cur.qty = Math.round((cur.qty + qty) * 100) / 100
-              else merged.set(key, { name: ing.name, qty, unit: ing.unit, price: ing.price })
+              if (cur) cur.amount += ing.qty * scale
+              else merged.set(key, { ing, amount: ing.qty * scale })
             }
           }
           if (!merged.size) return 0
@@ -417,9 +434,11 @@ export const useStore = create<Store>()(
           if (!listId) listId = get().addList('Groceries')
           const existing = new Set(get().listItems.filter((i) => i.list_id === listId).map((i) => i.text.toLowerCase()))
           let added = 0
-          for (const m of merged.values()) {
-            const qty = m.qty === Math.floor(m.qty) ? String(m.qty) : m.qty.toFixed(1)
-            const text = `${qty} ${m.unit} ${m.name}${m.price ? ` · ${Math.round(m.qty * m.price)} kr` : ''}`
+          for (const { ing, amount } of merged.values()) {
+            const scaled = { ...ing, qty: amount }
+            const packs = kronan.packsToBuy(scaled)
+            if (!packs) continue
+            const text = `${kronan.buyLabel(scaled)} ${ing.name}${ing.price ? ` · ${packs * ing.price} kr` : ''}`
             if (existing.has(text.toLowerCase())) continue
             get().addListItem(listId, text)
             added++

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarDays, ChefHat, ExternalLink, Plus, RefreshCw, Search, ShoppingCart, Trash2, Wand2 } from 'lucide-react'
+import { CalendarDays, Check, ChefHat, ExternalLink, Plus, RefreshCw, Search, ShoppingCart, Trash2, Wand2 } from 'lucide-react'
 import { useStore } from '../store/useStore'
 import type { Macros, MealPlan, Recipe, RecipeIngredient } from '../lib/types'
 import { addDays, format, weekStart, ymd } from '../lib/dates'
@@ -12,9 +12,11 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const planCost = (p: MealPlan, r: Recipe) => Math.round((r.est_cost * p.servings) / Math.max(1, r.servings))
 const fmtQty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, ''))
 const r0 = (n: number) => Math.round(n)
+const norm = (r: Recipe) => r.ingredients.map(kronan.normalizeIngredient)
 
 /** Total macros for a recipe at a given scale; `known` = ingredients with nutrition data. */
-const recipeMacros = (r: Recipe, scale = 1) => kronan.sumMacros(r.ingredients.map((i) => kronan.ingredientMacros(i, scale)))
+const recipeMacros = (r: Recipe, scale = 1) => kronan.sumMacros(norm(r).map((i) => kronan.ingredientMacros(i, scale)))
+const qtyLabel = (i: RecipeIngredient, scale = 1) => `${fmtQty(i.qty * scale)} ${i.unit}`
 
 function MacroPills({ m, per, compact }: { m: Macros; per?: string; compact?: boolean }) {
   const cls = compact ? 'text-[10px] px-1.5 py-0.5' : 'text-xs px-2 py-1'
@@ -58,7 +60,7 @@ export function Meals() {
       const r = recipes.find((x) => x.id === p.recipe_id)
       if (!r) continue
       const scale = p.servings / Math.max(1, r.servings)
-      for (const i of r.ingredients) if (i.sku) items.set(i.sku, (items.get(i.sku) ?? 0) + Math.ceil(i.qty * scale))
+      for (const i of norm(r)) if (i.sku) items.set(i.sku, (items.get(i.sku) ?? 0) + kronan.packsToBuy(i, scale))
     }
     if (!items.size) { showToast('No Krónan-linked ingredients in this plan'); return }
     setPushing(true)
@@ -124,7 +126,7 @@ export function Meals() {
 
       <SectionTitle right={<button className="btn btn-sm" onClick={() => setAdding(true)}><Plus size={14} /> Recipe</button>}>Recipe library</SectionTitle>
       {recipes.length === 0 ? (
-        <Empty icon="🍳" title="No recipes yet" hint="Add your own recipe with ingredient prices, or browse Krónan’s recipes." />
+        <Empty icon="🍳" title="No recipes yet" hint="Add your own recipe from Krónan’s store, or browse Krónan’s recipes." />
       ) : (
         <div className="grid grid-cols-2 gap-3">
           {recipes.map((r) => {
@@ -174,16 +176,17 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
     if (!needs) return
     setEnriching(true)
     kronan.enrichIngredients(kronanToken, recipe.ingredients)
-      .then((ings) => updateRecipe(recipe.id, { ingredients: ings }))
+      .then((ings) => updateRecipe(recipe.id, { ingredients: ings, est_cost: kronan.ingredientsCost(ings) }))
       .catch(() => { /* keep going without macros */ })
       .finally(() => setEnriching(false))
   }, [recipe?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!recipe) return null
+  const ings = norm(recipe)
   const scale = servings / Math.max(1, recipe.servings)
-  const cost = Math.round(recipe.est_cost * scale)
+  const cost = Math.round(ings.reduce((a, i) => a + kronan.lineCost(i, scale), 0))
   const macros = recipeMacros(recipe, scale)
-  const hasLinked = recipe.ingredients.some((i) => i.sku)
+  const hasLinked = ings.some((i) => i.sku)
 
   const refresh = async () => {
     if (!kronanToken || enriching) return
@@ -209,7 +212,7 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
       const n = addIngredientsToGroceries([{ recipe_id: recipe.id, servings }])
       let msg = `Planned · ${n} item${n === 1 ? '' : 's'} added to Groceries`
       if (kronanToken) {
-        const items = recipe.ingredients.filter((i) => i.sku).map((i) => ({ sku: i.sku!, quantity: Math.max(1, Math.ceil(i.qty * scale)) }))
+        const items = ings.filter((i) => i.sku).map((i) => ({ sku: i.sku!, quantity: Math.max(1, kronan.packsToBuy(i, scale)) }))
         if (items.length) {
           const list = await kronan.createProductList(kronanToken, `${recipe.title} (${servings} serv)`, items)
           msg += ` · sent to Krónan list “${list.name}”`
@@ -236,7 +239,6 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
         </div>
       </div>
 
-      {/* Servings + cost + macros */}
       <Card className="p-3" style={{ background: 'rgba(34,197,94,0.12)' }}>
         <div className="flex items-center justify-between">
           <div>
@@ -263,28 +265,24 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
 
       <button className="btn btn-primary text-[16px] py-3" onClick={() => setCooking(true)}><ChefHat size={18} /> Make this</button>
 
-      {/* Need to buy (compact) */}
+      {/* Need to buy: used amount rounded up to whole packages */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <div className="text-3 text-xs font-semibold uppercase tracking-wide">🛒 Need to buy</div>
           <div className="text-sm font-bold">{isk(cost)}</div>
         </div>
         <div className="flex flex-col">
-          {recipe.ingredients.map((i, n) => {
-            const q = Math.ceil(i.qty * scale * 100) / 100
-            return (
-              <button key={n} onClick={() => setIngOpen(i)} className="flex items-center gap-2 text-sm text-left w-full py-1.5 border-b hairline last:border-b-0">
-                {i.thumbnail ? <img src={i.thumbnail} alt="" className="w-7 h-7 rounded-md object-contain bg-white" loading="lazy" /> : <span className="w-7 h-7 rounded-md bg-line inline-flex items-center justify-center text-[10px]">🛒</span>}
-                <div className="grow min-w-0 truncate"><b>{fmtQty(q)} {i.unit}</b> {i.name}</div>
-                <div className="font-medium shrink-0 text-2">{i.price ? isk(q * i.price) : '—'}</div>
-              </button>
-            )
-          })}
-          {recipe.ingredients.length === 0 && <div className="text-3 text-sm">No ingredients listed.</div>}
+          {ings.map((i, n) => (
+            <button key={n} onClick={() => setIngOpen(i)} className="flex items-center gap-2 text-sm text-left w-full py-1.5 border-b hairline last:border-b-0">
+              {i.thumbnail ? <img src={i.thumbnail} alt="" className="w-7 h-7 rounded-md object-contain bg-white" loading="lazy" /> : <span className="w-7 h-7 rounded-md bg-line inline-flex items-center justify-center text-[10px]">🛒</span>}
+              <div className="grow min-w-0 truncate"><b>{kronan.buyLabel(i, scale)}</b> {i.name}</div>
+              <div className="font-medium shrink-0 text-2">{i.price ? isk(kronan.lineCost(i, scale)) : '—'}</div>
+            </button>
+          ))}
+          {ings.length === 0 && <div className="text-3 text-sm">No ingredients listed.</div>}
         </div>
       </div>
 
-      {/* Plan & shop */}
       <div className="glass p-3 flex flex-col gap-2">
         <div className="text-sm font-semibold">Plan for week of {format(new Date(week + 'T00:00:00'), 'MMM d')}</div>
         <div className="flex gap-1 flex-wrap">
@@ -300,7 +298,6 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
         {kronanToken && hasLinked && <button className="btn" onClick={refresh} disabled={enriching}><RefreshCw size={16} className={enriching ? 'animate-spin' : ''} /> Refresh</button>}
         <button className="btn grow" onClick={() => setEditing(true)}>Edit recipe</button>
       </div>
-      <p className="text-3 text-[10px] -mt-2">Pack size per unit comes from Krónan’s product data. If one looks wrong, fix “g per unit” under Edit recipe.</p>
 
       <Sheet open={!!ingOpen} onClose={() => setIngOpen(null)} title={ingOpen?.name ?? ''}>
         {ingOpen && <IngredientInfo i={ingOpen} />}
@@ -310,13 +307,6 @@ function RecipeDetail({ id, week, onClose }: { id: string; week: string; onClose
 }
 
 /* ------------------------------ cook mode ------------------------------ */
-
-const usedLabel = (i: RecipeIngredient, scale: number) => {
-  const g = kronan.ingredientGrams(i, scale)
-  if (i.used_qty !== null && i.used_qty !== undefined) return `${fmtQty(i.used_qty * scale)} ${i.used_unit || 'g'}`
-  if (g !== null) return `${fmtQty(g)} ${i.used_unit === 'ml' ? 'ml' : 'g'}`
-  return `${fmtQty(i.qty * scale)} ${i.unit}`
-}
 
 /** "10 mín", "15-20 minutes", "1 klst", "30 sek" → seconds (first match). */
 const minutesInText = (s: string): number | null => {
@@ -408,12 +398,12 @@ function Timer({ request }: { request: { secs: number; label: string; nonce: num
 
 function CookMode({ recipe, servings, onBack }: { recipe: Recipe; servings: number; onBack: () => void }) {
   const scale = servings / Math.max(1, recipe.servings)
+  const ings = norm(recipe)
   const [doneIngs, setDoneIngs] = useState<Set<number>>(new Set())
   const [doneSteps, setDoneSteps] = useState<Set<number>>(new Set())
   const [request, setRequest] = useState<{ secs: number; label: string; nonce: number } | null>(null)
   const steps = useMemo(() => recipe.directions.split(/\n+/).map((s) => s.trim()).filter(Boolean), [recipe.directions])
 
-  // Keep the screen awake while cooking, when the browser allows it.
   useEffect(() => {
     let lock: { release: () => Promise<void> } | null = null
     const nav = navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }
@@ -438,12 +428,12 @@ function CookMode({ recipe, servings, onBack }: { recipe: Recipe; servings: numb
       <div>
         <div className="text-3 text-xs font-semibold uppercase tracking-wide mb-1.5">Ingredients</div>
         <div className="flex flex-col">
-          {recipe.ingredients.map((i, n) => {
+          {ings.map((i, n) => {
             const on = doneIngs.has(n)
             return (
               <button key={n} onClick={() => toggle(doneIngs, n, setDoneIngs)} className="flex items-center gap-2 text-left text-[15px] py-2 border-b hairline last:border-b-0">
                 <CheckCircle checked={on} size={22} color="#22c55e" />
-                <span className={`grow min-w-0 ${on ? 'line-through text-3' : ''}`}><b>{usedLabel(i, scale)}</b> {i.name}{i.note ? <span className="text-3 text-xs"> · {i.note}</span> : null}</span>
+                <span className={`grow min-w-0 ${on ? 'line-through text-3' : ''}`}><b>{qtyLabel(i, scale)}</b> {i.name}{i.note ? <span className="text-3 text-xs"> · {i.note}</span> : null}</span>
               </button>
             )
           })}
@@ -484,8 +474,8 @@ function IngredientInfo({ i }: { i: RecipeIngredient }) {
         {i.thumbnail ? <img src={i.thumbnail} alt="" className="w-20 h-20 rounded-xl object-contain bg-white" /> : <span className="w-20 h-20 rounded-xl bg-line inline-flex items-center justify-center text-2xl">🛒</span>}
         <div>
           <div className="font-semibold">{i.name}</div>
-          <div className="text-2 text-sm">{i.price ? `${isk(i.price)} / ${i.unit}` : 'price unknown'}</div>
-          {i.pack_g && <div className="text-3 text-xs">{i.pack_g} g per {i.unit}</div>}
+          <div className="text-2 text-sm">{i.price ? `${isk(i.price)} per pack` : 'price unknown'}</div>
+          {i.pack_g && <div className="text-3 text-xs">{i.pack_g} {i.unit === 'ml' ? 'ml' : 'g'} per pack</div>}
         </div>
       </div>
       {i.macros ? <div><div className="text-3 text-xs font-semibold uppercase tracking-wide mb-1">Per 100 g</div><MacroPills m={i.macros} /></div> : <div className="text-3 text-sm">No nutrition data.</div>}
@@ -542,10 +532,7 @@ function KronanRecipeSearch({ onDone }: { onDone: () => void }) {
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not load recipes') } finally { setBusy(false) }
   }
 
-  // Auto-load the catalogue on open.
   useEffect(() => { void load('', 1, true) }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Infinite scroll inside the sheet.
   useEffect(() => {
     const el = sentinel.current
     if (!el || preview) return
@@ -564,7 +551,7 @@ function KronanRecipeSearch({ onDone }: { onDone: () => void }) {
     try {
       const base = kronan.toRecipe(await kronan.getRecipe(kronanToken, slug))
       const ingredients = await kronan.enrichIngredients(kronanToken, base.ingredients).catch(() => base.ingredients)
-      setPreview({ ...base, ingredients })
+      setPreview({ ...base, ingredients, est_cost: kronan.ingredientsCost(ingredients) })
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not load recipe') } finally { setBusy(false) }
   }
 
@@ -587,7 +574,7 @@ function KronanRecipeSearch({ onDone }: { onDone: () => void }) {
         <div className="text-2 text-sm">{preview.servings} servings · {preview.ingredients.length} ingredients · est. <b>{isk(preview.est_cost)}</b></div>
         {m.known > 0 && <MacroPills m={{ kcal: m.total.kcal / preview.servings, protein: m.total.protein / preview.servings, carbs: m.total.carbs / preview.servings, fat: m.total.fat / preview.servings }} per="per serving" />}
         <div className="flex flex-col gap-1 text-sm max-h-48 overflow-y-auto">
-          {preview.ingredients.map((i, n) => <div key={n} className="flex justify-between gap-2"><span className="truncate">{i.qty} {i.unit} {i.name}</span><span className="shrink-0 text-2">{i.price ? isk(i.qty * i.price) : '—'}</span></div>)}
+          {preview.ingredients.map((i, n) => <div key={n} className="flex justify-between gap-2"><span className="truncate">{qtyLabel(i)} {i.name}</span><span className="shrink-0 text-2">{i.price ? isk(kronan.lineCost(i)) : '—'}</span></div>)}
         </div>
         <div className="flex gap-2">
           <button className="btn" onClick={() => setPreview(null)}>Back</button>
@@ -625,7 +612,7 @@ function KronanRecipeSearch({ onDone }: { onDone: () => void }) {
 
 /* ------------------------------ custom recipe form ------------------------------ */
 
-const blankIng = (): RecipeIngredient => ({ name: '', qty: 1, unit: 'stk', price: 0, sku: null, thumbnail: null, note: '', used_qty: null, used_unit: 'g', pack_g: null, nutrition: null, macros: null })
+const blankIng = (name = ''): RecipeIngredient => ({ name, qty: 1, unit: 'stk', price: 0, sku: null, thumbnail: null, note: '', used_qty: null, pack_g: null, nutrition: null, macros: null })
 
 function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void }) {
   const kronanToken = useStore((s) => s.kronanToken)
@@ -634,8 +621,9 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
   const [servings, setServings] = useState(initial?.servings ?? 4)
   const [url, setUrl] = useState(initial?.url ?? '')
   const [directions, setDirections] = useState(initial?.directions ?? '')
-  const [ings, setIngs] = useState<RecipeIngredient[]>(initial?.ingredients.length ? initial.ingredients : [blankIng()])
-  const [lookup, setLookup] = useState<number | null>(null)
+  const [ings, setIngs] = useState<RecipeIngredient[]>(initial ? norm(initial) : [])
+  const [store, setStore] = useState(false)
+  const [manualName, setManualName] = useState('')
 
   const setIng = (i: number, patch: Partial<RecipeIngredient>) => setIngs((a) => a.map((x, n) => (n === i ? { ...x, ...patch } : x)))
   const cost = kronan.ingredientsCost(ings)
@@ -650,19 +638,12 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
     onDone()
   }
 
-  if (lookup !== null) {
-    return (
-      <ProductLookup
-        query={ings[lookup].name}
-        onPick={(p) => {
-          const cur = ings[lookup]
-          setIng(lookup, { ...kronan.productToIngredient(p, cur.qty || 1, cur.note), used_qty: cur.used_qty ?? null, used_unit: cur.used_unit || 'g' })
-          setLookup(null)
-        }}
-        onBack={() => setLookup(null)}
-      />
-    )
+  const addProducts = (picked: RecipeIngredient[]) => {
+    setIngs((a) => [...a, ...picked.filter((p) => !a.some((x) => x.sku && x.sku === p.sku))])
+    setStore(false)
   }
+
+  if (store) return <StorePicker onDone={addProducts} onBack={() => setStore(false)} />
 
   return (
     <div className="flex flex-col gap-3">
@@ -673,44 +654,52 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-1.5">
           <span className="text-3 text-xs font-semibold uppercase tracking-wide">Ingredients</span>
           <span className="text-sm font-semibold">{isk(cost)}</span>
         </div>
-        {macros.known > 0 && <div className="mb-2"><MacroPills m={{ kcal: macros.total.kcal / Math.max(1, servings), protein: macros.total.protein / Math.max(1, servings), carbs: macros.total.carbs / Math.max(1, servings), fat: macros.total.fat / Math.max(1, servings) }} per="per serving" compact /></div>}
-        <div className="flex flex-col gap-2">
+        {kronanToken
+          ? <button className="btn btn-primary w-full py-3" onClick={() => setStore(true)}><Plus size={18} /> Ingredient from Krónan</button>
+          : <div className="flex gap-2">
+              <input className="field" placeholder="Ingredient name" value={manualName} onChange={(e) => setManualName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && manualName.trim()) { setIngs((a) => [...a, blankIng(manualName.trim())]); setManualName('') } }} />
+              <button className="btn btn-primary" onClick={() => { if (manualName.trim()) { setIngs((a) => [...a, blankIng(manualName.trim())]); setManualName('') } }}><Plus size={16} /></button>
+            </div>}
+        {macros.known > 0 && <div className="mt-2"><MacroPills m={{ kcal: macros.total.kcal / Math.max(1, servings), protein: macros.total.protein / Math.max(1, servings), carbs: macros.total.carbs / Math.max(1, servings), fat: macros.total.fat / Math.max(1, servings) }} per="per serving" compact /></div>}
+
+        <div className="flex flex-col mt-2">
+          {ings.length === 0 && <div className="text-3 text-sm py-2">No ingredients yet.</div>}
           {ings.map((i, n) => (
-            <div key={n} className="glass p-2 flex flex-col gap-1.5">
-              <div className="flex gap-1.5 items-center">
-                {i.thumbnail && <img src={i.thumbnail} alt="" className="w-9 h-9 rounded-lg object-contain bg-white shrink-0" />}
-                <input className="field grow" placeholder="Ingredient" value={i.name} onChange={(e) => setIng(n, { name: e.target.value })} />
-                {kronanToken
-                  ? <button className="btn btn-sm shrink-0" onClick={() => setLookup(n)} title="Find at Krónan"><Search size={14} /></button>
-                  : <a className="btn btn-sm shrink-0" href={kronan.kronanSearchUrl(i.name)} target="_blank" rel="noreferrer" title="Search kronan.is"><ExternalLink size={14} /></a>}
-                <button className="btn btn-sm shrink-0" onClick={() => setIngs((a) => a.filter((_, k) => k !== n))} aria-label="Remove"><Trash2 size={14} /></button>
+            <div key={n} className="flex items-center gap-2 py-2 border-b hairline last:border-b-0">
+              {i.thumbnail ? <img src={i.thumbnail} alt="" className="w-9 h-9 rounded-lg object-contain bg-white shrink-0" /> : <span className="w-9 h-9 rounded-lg bg-line shrink-0 inline-flex items-center justify-center text-xs">🛒</span>}
+              <div className="grow min-w-0">
+                <div className="text-sm font-medium truncate">{i.name}</div>
+                <div className="text-3 text-[11px] truncate">
+                  {i.price ? `${kronan.buyLabel(i)} · ${isk(kronan.lineCost(i))}` : 'no price'}
+                  {i.pack_g ? ` · ${i.pack_g} ${i.unit === 'ml' ? 'ml' : 'g'}/pack` : ''}
+                </div>
               </div>
-              <div className="grid grid-cols-[1fr_1fr_1.2fr] gap-1.5 items-end">
-                <label className="text-[10px] text-3">Buy<input className="field !py-1.5 text-sm" type="number" min={0} step="0.1" value={i.qty} onChange={(e) => setIng(n, { qty: Number(e.target.value) || 0 })} /></label>
-                <label className="text-[10px] text-3">Unit<input className="field !py-1.5 text-sm" value={i.unit} onChange={(e) => setIng(n, { unit: e.target.value })} /></label>
-                <label className="text-[10px] text-3">kr / unit<input className="field !py-1.5 text-sm" type="number" min={0} value={i.price || ''} onChange={(e) => setIng(n, { price: Number(e.target.value) || 0 })} /></label>
-              </div>
-              <div className="grid grid-cols-[1fr_1fr_1.2fr] gap-1.5 items-end">
-                <label className="text-[10px] text-3">Used in dish<input className="field !py-1.5 text-sm" type="number" min={0} placeholder="all" value={i.used_qty ?? ''} onChange={(e) => setIng(n, { used_qty: e.target.value === '' ? null : Number(e.target.value) })} /></label>
-                <label className="text-[10px] text-3">Unit
-                  <select className="field !py-1.5 text-sm" value={i.used_unit || 'g'} onChange={(e) => setIng(n, { used_unit: e.target.value })}>
-                    <option value="g">g</option><option value="ml">ml</option><option value="stk">stk</option>
-                  </select>
-                </label>
-                <label className="text-[10px] text-3">g per unit<input className="field !py-1.5 text-sm" type="number" min={0} placeholder="?" value={i.pack_g ?? ''} onChange={(e) => setIng(n, { pack_g: e.target.value === '' ? null : Number(e.target.value) })} /></label>
-              </div>
-              <div className="flex items-center justify-between">
-                {i.macros ? <MacroPills m={i.macros} per="/100 g" compact /> : <span className="text-3 text-[10px]">{i.sku ? 'no nutrition data' : 'link to a Krónan product for macros'}</span>}
-                {i.sku && <span className="text-3 text-[10px]">Krónan {i.sku}</span>}
-              </div>
+              <input className="field !w-16 !py-1.5 !px-2 text-sm text-right" type="number" min={0} step="any" value={i.qty} onChange={(e) => setIng(n, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
+              <select className="field !w-auto !py-1.5 !px-1.5 text-sm" value={i.unit} onChange={(e) => setIng(n, { unit: e.target.value })} aria-label="Unit">
+                <option value="g">g</option><option value="ml">ml</option><option value="stk">stk</option>
+              </select>
+              <button className="text-3 p-1" onClick={() => setIngs((a) => a.filter((_, k) => k !== n))} aria-label="Remove"><Trash2 size={15} /></button>
             </div>
           ))}
         </div>
-        <button className="btn btn-sm mt-2" onClick={() => setIngs((a) => [...a, blankIng()])}><Plus size={14} /> Ingredient</button>
+        {ings.some((i) => !i.sku) && (
+          <details className="mt-2">
+            <summary className="text-3 text-xs cursor-pointer">Prices & pack sizes for items not from Krónan</summary>
+            <div className="flex flex-col gap-1.5 mt-2">
+              {ings.map((i, n) => !i.sku && (
+                <div key={n} className="grid grid-cols-[1fr_auto_auto] gap-1.5 items-center text-sm">
+                  <span className="truncate">{i.name}</span>
+                  <input className="field !w-24 !py-1 !px-2 text-sm" type="number" min={0} placeholder="kr/pack" value={i.price || ''} onChange={(e) => setIng(n, { price: Number(e.target.value) || 0 })} />
+                  <input className="field !w-24 !py-1 !px-2 text-sm" type="number" min={0} placeholder="g/pack" value={i.pack_g ?? ''} onChange={(e) => setIng(n, { pack_g: e.target.value === '' ? null : Number(e.target.value) })} />
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
 
       <label className="text-3 text-xs font-semibold uppercase tracking-wide">Directions
@@ -722,88 +711,110 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
   )
 }
 
-/* ------------------------------ product browser (3-column grid) ------------------------------ */
+/* ------------------------------ Krónan store picker (multi-select) ------------------------------ */
 
-function ProductLookup({ query, onPick, onBack }: { query: string; onPick: (p: kronan.KProductDetail | kronan.KSearchHit) => void; onBack: () => void }) {
+const PRESETS = ['Kjúklingur', 'Hakk', 'Lax', 'Egg', 'Hrísgrjón', 'Pasta', 'Kartöflur', 'Grænmeti', 'Ostur', 'Skyr', 'Mjólk', 'Brauð', 'Baunir', 'Krydd']
+
+function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) => void; onBack: () => void }) {
   const kronanToken = useStore((s) => s.kronanToken)!
-  const [q, setQ] = useState(query)
+  const [q, setQ] = useState('')
+  const [active, setActive] = useState<string>('')
   const [hits, setHits] = useState<kronan.KSearchHit[]>([])
   const [details, setDetails] = useState<Map<string, kronan.KProductDetail>>(new Map())
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [info, setInfo] = useState<kronan.KSearchHit | null>(null)
+  const [picked, setPicked] = useState<Map<string, kronan.KSearchHit>>(new Map())
   const sentinel = useRef<HTMLDivElement>(null)
-  const activeQuery = useRef(query)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const fetchDetails = (skus: string[]) => {
+    kronan.getProductDetails(kronanToken, skus).then((m) => setDetails((cur) => new Map([...cur, ...m]))).catch(() => { /* optional */ })
+  }
 
   const run = async (term: string, pageNo: number, replace: boolean) => {
-    if (!term.trim()) return
     setBusy(true); setError(null)
     try {
-      const res = await kronan.searchProducts(kronanToken, term.trim(), pageNo)
+      let res: { hits: kronan.KSearchHit[]; hasNextPage: boolean }
+      if (term.trim()) res = await kronan.searchProducts(kronanToken, term.trim(), pageNo)
+      else {
+        // "Store front": the user's favourite products, or a staple search when there are none.
+        const favs = await kronan.favoriteProducts(kronanToken).catch(() => [] as kronan.KProduct[])
+        res = favs.length ? { hits: favs as kronan.KSearchHit[], hasNextPage: false } : await kronan.searchProducts(kronanToken, PRESETS[0], pageNo)
+      }
       setHits((cur) => (replace ? res.hits : [...cur, ...res.hits.filter((h) => !cur.some((c) => c.sku === h.sku))]))
       setHasMore(res.hasNextPage); setPage(pageNo)
-      // Nutrition + package size come from product details: fetch them for this page in one batch.
-      kronan.getProductDetails(kronanToken, res.hits.map((h) => h.sku))
-        .then((m) => setDetails((cur) => new Map([...cur, ...m])))
-        .catch(() => { /* macros are optional */ })
+      fetchDetails(res.hits.map((h) => h.sku))
     } catch (e) { setError(e instanceof Error ? e.message : 'Search failed') } finally { setBusy(false) }
   }
 
-  useEffect(() => { void run(query, 1, true) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void run('', 1, true); inputRef.current?.focus() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = sentinel.current
     if (!el) return
-    const io = new IntersectionObserver((en) => { if (en[0].isIntersecting && hasMore && !busy) void run(activeQuery.current, page + 1, false) }, { rootMargin: '200px' })
+    const io = new IntersectionObserver((en) => { if (en[0].isIntersecting && hasMore && !busy) void run(active, page + 1, false) }, { rootMargin: '200px' })
     io.observe(el)
     return () => io.disconnect()
-  }, [hasMore, busy, page]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasMore, busy, page, active]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pick = (p: kronan.KSearchHit) => onPick(details.get(p.sku) ? { ...details.get(p.sku)!, detail: p.detail } as kronan.KProductDetail : p)
+  const search = (term: string) => { setActive(term); setQ(term); void run(term, 1, true) }
+  const toggle = (p: kronan.KSearchHit) => setPicked((cur) => { const m = new Map(cur); if (m.has(p.sku)) m.delete(p.sku); else m.set(p.sku, p); return m })
+
+  const finish = () => {
+    const out = [...picked.values()].map((p) => {
+      const d = details.get(p.sku)
+      // Details add nutrition + pack size; the search hit keeps the authoritative name, price and sale info.
+      const merged = d ? ({ ...d, name: p.name, price: p.price, thumbnail: p.thumbnail || d.thumbnail, detail: p.detail } as kronan.KProductDetail) : p
+      return kronan.productToIngredient(merged, 1)
+    })
+    onDone(out)
+  }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex gap-2">
-        <button className="btn btn-sm" onClick={onBack}>Back</button>
-        <input className="field" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { activeQuery.current = q; void run(q, 1, true) } }} />
-        <button className="btn btn-primary btn-sm" onClick={() => { activeQuery.current = q; void run(q, 1, true) }} disabled={busy}><Search size={14} /></button>
+    <div className="flex flex-col gap-3 -mb-6 pb-20">
+      <div className="flex gap-2 items-center">
+        <button className="btn btn-sm" onClick={onBack}>‹</button>
+        <div className="relative grow">
+          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-3" />
+          <input ref={inputRef} className="field !pl-10 !py-3 text-[16px]" placeholder="Search Krónan…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search(q)} />
+        </div>
+      </div>
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-4 px-4">
+        <button className={`btn btn-sm shrink-0 ${active === '' ? 'btn-primary' : ''}`} onClick={() => search('')}>⭐ Mine</button>
+        {PRESETS.map((p) => <button key={p} className={`btn btn-sm shrink-0 ${active === p ? 'btn-primary' : ''}`} onClick={() => search(p)}>{p}</button>)}
       </div>
       {error && <div className="text-xs p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>{error}</div>}
+
       <div className="grid grid-cols-3 gap-2">
         {hits.map((p) => {
           const d = details.get(p.sku)
           const m = kronan.parseMacros(d?.nutrition)
+          const on = picked.has(p.sku)
           return (
-            <div key={p.sku} className="glass overflow-hidden flex flex-col">
-              <button onClick={() => pick(p)} className="press text-left">
-                <div className="w-full aspect-square bg-white flex items-center justify-center overflow-hidden">
-                  {p.thumbnail ? <img src={p.thumbnail} alt="" className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">🛒</span>}
-                </div>
-                <div className="p-1.5">
-                  <div className="text-[11px] leading-tight line-clamp-2 min-h-[2.4em]">{p.name}</div>
-                  <div className="font-bold text-[13px] mt-0.5">{isk(kronan.effectivePrice(p))}</div>
-                  {p.detail?.onSale && <div className="text-[10px] text-3 line-through">{isk(p.price)}</div>}
-                  <div className="text-[10px]" style={{ color: m ? '#ea580c' : 'var(--text-3)' }}>{m ? `${r0(m.kcal)} kcal · P${r0(m.protein)} C${r0(m.carbs)} F${r0(m.fat)}` : d ? 'no macros' : '…'}</div>
-                </div>
-              </button>
-              <button className="text-[10px] text-3 underline pb-1" onClick={() => setInfo(p)}>details</button>
-            </div>
+            <button key={p.sku} onClick={() => toggle(p)} className="glass overflow-hidden flex flex-col text-left press relative" style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
+              {on && <span className="absolute top-1 right-1 w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center animate-pop"><Check size={14} strokeWidth={3} /></span>}
+              <div className="w-full aspect-square bg-white flex items-center justify-center overflow-hidden">
+                {p.thumbnail ? <img src={p.thumbnail} alt="" className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">🛒</span>}
+              </div>
+              <div className="p-1.5">
+                <div className="text-[11px] leading-tight line-clamp-2 min-h-[2.4em]">{p.name}</div>
+                <div className="font-bold text-[13px] mt-0.5">{isk(kronan.effectivePrice(p))}</div>
+                <div className="text-[10px]" style={{ color: m ? '#ea580c' : 'var(--text-3)' }}>{m ? `${r0(m.kcal)} kcal/100g` : d ? 'no macros' : '…'}</div>
+              </div>
+            </button>
           )
         })}
       </div>
-      {busy && <div className="text-3 text-sm text-center py-2">Searching Krónan…</div>}
+      {busy && <div className="text-3 text-sm text-center py-2">Loading…</div>}
       {!busy && hits.length === 0 && !error && <div className="text-3 text-sm">No products found.</div>}
       <div ref={sentinel} className="h-2" />
 
-      <Sheet open={!!info} onClose={() => setInfo(null)} title={info?.name ?? ''}>
-        {info && (
-          <div className="flex flex-col gap-3">
-            <IngredientInfo i={kronan.productToIngredient(details.get(info.sku) ?? info)} />
-            <button className="btn btn-primary" onClick={() => { pick(info); setInfo(null) }}>Use this product</button>
-          </div>
-        )}
-      </Sheet>
+      <div className="fixed left-1/2 -translate-x-1/2 w-full max-w-[400px] px-4 z-10" style={{ bottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+        <button className="btn btn-primary w-full py-3 shadow-xl" onClick={finish} disabled={picked.size === 0}>
+          <Check size={18} /> Add {picked.size || ''} item{picked.size === 1 ? '' : 's'}
+        </button>
+      </div>
     </div>
   )
 }

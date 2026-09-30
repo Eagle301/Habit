@@ -97,6 +97,10 @@ export const searchProducts = (token: string, query: string, page = 1) =>
     method: 'POST', body: JSON.stringify({ query, page, pageSize: 20, withDetail: true }),
   })
 
+export const favoriteProducts = (token: string) =>
+  kfetch<{ results?: KProduct[]; products?: KProduct[] } | KProduct[]>(token, 'products/favorites/')
+    .then((r) => (Array.isArray(r) ? r : r.results ?? r.products ?? []))
+
 export const searchRecipes = (token: string, query: string, page = 1) =>
   kfetch<{ recipes: KRecipeListItem[]; count: number; hasNextPage: boolean }>(token, 'recipes/search/', {
     method: 'POST', body: JSON.stringify({ query, page }),
@@ -192,15 +196,47 @@ export function packGrams(p: KProductDetail | KProduct): number | null {
   return null
 }
 
-/** Grams of an ingredient actually used in the dish. */
-export const ingredientGrams = (i: RecipeIngredient, scale = 1): number | null => {
+/**
+ * Ingredient model: `qty` + `unit` is the amount USED in the dish (g, ml or stk). Packages to buy are
+ * derived from the product's pack size when it's time to shop. Older records that stored packages in
+ * `qty` (with the used amount in `used_qty`) are normalised here.
+ */
+export const normalizeIngredient = (i: RecipeIngredient): RecipeIngredient => {
   if (i.used_qty !== null && i.used_qty !== undefined) {
-    if (i.used_unit === 'stk') return i.pack_g ? i.used_qty * i.pack_g * scale : null
-    return i.used_qty * scale
+    return { ...i, qty: i.used_qty, unit: i.used_unit || 'g', used_qty: null, used_unit: undefined }
   }
-  if (i.unit === 'kg') return i.qty * 1000 * scale
-  if (i.unit === 'g' || i.unit === 'ml') return i.qty * scale
-  return i.pack_g ? i.qty * i.pack_g * scale : null
+  if (i.unit === 'kg') return { ...i, qty: i.qty * 1000, unit: 'g' }
+  if (i.unit === 'l') return { ...i, qty: i.qty * 1000, unit: 'ml' }
+  if (i.unit === 'stk' && i.pack_g) return { ...i, qty: i.qty * i.pack_g, unit: 'g' }
+  if (!['g', 'ml', 'stk'].includes(i.unit)) return { ...i, unit: 'stk' }
+  return i
+}
+
+/** Grams (or ml) of an ingredient actually used in the dish. */
+export const ingredientGrams = (i: RecipeIngredient, scale = 1): number | null => {
+  const n = normalizeIngredient(i)
+  if (n.unit === 'g' || n.unit === 'ml') return n.qty * scale
+  return n.pack_g ? n.qty * n.pack_g * scale : null
+}
+
+/** Whole packages/pieces to buy for the used amount, rounded up to the product's pack size. */
+export const packsToBuy = (i: RecipeIngredient, scale = 1): number => {
+  const n = normalizeIngredient(i)
+  const amount = n.qty * scale
+  if (amount <= 0) return 0
+  if (n.unit === 'stk') return Math.ceil(amount - 1e-9)
+  if (n.pack_g && n.pack_g > 0) return Math.ceil(amount / n.pack_g - 1e-9)
+  return 1
+}
+
+export const lineCost = (i: RecipeIngredient, scale = 1) => packsToBuy(i, scale) * (i.price || 0)
+
+/** Label for the amount to buy, e.g. "2 × 400 g" or "3 stk". */
+export const buyLabel = (i: RecipeIngredient, scale = 1) => {
+  const n = normalizeIngredient(i)
+  const packs = packsToBuy(n, scale)
+  if (n.unit === 'stk' || !n.pack_g) return `${packs} stk`
+  return `${packs} × ${n.pack_g} ${n.unit === 'ml' ? 'ml' : 'g'}`
 }
 
 export const ingredientMacros = (i: RecipeIngredient, scale = 1): Macros | null => {
@@ -227,10 +263,12 @@ export async function enrichIngredients(token: string, ings: RecipeIngredient[])
     if (!d) return i
     const pack_g = packGrams(d)
     const nutrition = d.nutrition ?? null
+    const n = normalizeIngredient(i)
+    // A piece-based amount becomes grams once the pack size is known.
+    const upgraded = n.unit === 'stk' && pack_g && !d.qtyInSalesUnit ? { qty: n.qty * pack_g, unit: 'g' } : {}
     return {
-      ...i, pack_g, nutrition, macros: parseMacros(nutrition),
+      ...n, ...upgraded, pack_g, nutrition, macros: parseMacros(nutrition),
       price: effectivePrice(d) || i.price,
-      unit: d.chargedByWeight ? 'kg' : i.unit,
       thumbnail: i.thumbnail || d.thumbnail || null,
     }
   })
@@ -267,18 +305,28 @@ const usedFromComment = (comment: string): { used_qty: number; used_unit: string
   return { used_qty: n, used_unit: u === 'gr' ? 'g' : u }
 }
 
-export const productToIngredient = (p: KProduct | KSearchHit | KProductDetail, qty = 1, note = ''): RecipeIngredient => {
+/**
+ * Turn a Krónan product into an ingredient. `packages` is how many sales units the source (e.g. a Krónan
+ * recipe) lists; the used amount defaults to that many whole packs unless the comment says otherwise.
+ */
+export const productToIngredient = (p: KProduct | KSearchHit | KProductDetail, packages = 1, note = ''): RecipeIngredient => {
   const d = p as KProductDetail
   const nutrition = d.nutrition ?? null
+  const pack_g = packGrams(p)
+  const isLiquid = /^(l|ltr|ml)$/.test((p.baseComparisonUnit || '').toLowerCase()) || /\b(ml|dl|cl|l|ltr)\b/i.test(p.name)
+  const used = usedFromComment(note)
+  let qty: number, unit: string
+  if (used) { qty = used.used_qty; unit = used.used_unit }
+  else if (pack_g) { qty = packages * pack_g; unit = isLiquid ? 'ml' : 'g' }
+  else { qty = packages; unit = 'stk' }
   return {
-    name: p.name, qty, unit: p.chargedByWeight ? 'kg' : 'stk', price: effectivePrice(p),
+    name: p.name, qty, unit, price: effectivePrice(p),
     sku: p.sku, thumbnail: p.thumbnail || null, note,
-    used_qty: usedFromComment(note)?.used_qty ?? null, used_unit: usedFromComment(note)?.used_unit ?? 'g',
-    pack_g: packGrams(p), nutrition, macros: parseMacros(nutrition),
+    used_qty: null, pack_g, nutrition, macros: parseMacros(nutrition),
   }
 }
 
-export const ingredientsCost = (ings: RecipeIngredient[]) => Math.round(ings.reduce((a, i) => a + i.qty * (i.price || 0), 0))
+export const ingredientsCost = (ings: RecipeIngredient[]) => Math.round(ings.reduce((a, i) => a + lineCost(i), 0))
 
 /** Convert a Krónan recipe into our Recipe shape (without id/user/created_at). */
 export const toRecipe = (d: KRecipeDetail): Omit<Recipe, 'id' | 'user_id' | 'created_at'> => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarPlus, ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
+import { CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
 import { useStore, useActiveHabits } from '../store/useStore'
 import type { Habit } from '../lib/types'
 import { todayKey, format, fmtTime, combine, hhmm, fromKey, addDays, subDays, ymd } from '../lib/dates'
@@ -22,6 +22,7 @@ export function Today() {
   const loadEvents = useStore((s) => s.loadEvents)
   const { toggleHabit, setReflection, setReflectionNote, scheduleBlock, syncBlocksToGoogle, showToast, setTab } = useStore()
   const [savingCal, setSavingCal] = useState(false)
+  const [routineOpen, setRoutineOpen] = useState(false)
 
   const user = useStore((s) => s.user)
   const todayK = todayKey()
@@ -122,7 +123,7 @@ export function Today() {
 
       <DayStrip date={date} todayK={todayK} onChange={setDate} rateFor={(k) => dayRate(allHabits, idx, k)} />
 
-      <Card className="flex items-center gap-4 mt-3">
+      <Card className="flex items-center gap-4 mt-2">
         <ProgressRing value={progress} size={112}>
           <div className="text-2xl font-bold">{Math.round(progress * 100)}%</div>
           <div className="text-3 text-[11px]">complete</div>
@@ -171,18 +172,23 @@ export function Today() {
         </>
       )}
 
-      <SectionTitle right={
-        stream.some((it) => it.source === 'habit') ? (
-          googleConnected
-            ? <button className="btn btn-sm" onClick={saveDayToCalendar} disabled={savingCal || (unsavedHabitItems.length === 0)}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : unsavedHabitItems.length ? `Save to calendar (${unsavedHabitItems.length})` : 'In calendar ✓'}</button>
-            : <button className="btn btn-sm btn-ghost text-3" onClick={() => setTab('settings')}><CalendarPlus size={14} /> Connect calendar</button>
-        ) : undefined
-      }>Schedule</SectionTitle>
-      {stream.length === 0 ? (
-        <Card><div className="text-2 text-sm">Nothing scheduled {isToday ? 'today' : 'that day'}. {googleConnected ? '' : 'Connect Google Calendar in Settings to see your events here.'}</div></Card>
-      ) : (
-        <Card className="flex flex-col gap-0 p-2">
-          {stream.map((it) => {
+      <SectionTitle>Day routine</SectionTitle>
+      <Card className="p-0 overflow-hidden">
+        <button className="w-full flex items-center gap-3 p-3 text-left" onClick={() => setRoutineOpen(!routineOpen)} aria-expanded={routineOpen}>
+          <div className="grow min-w-0">
+            <div className="font-semibold text-[15px]">{stream.length ? `${stream.length} item${stream.length === 1 ? '' : 's'}` : 'Nothing scheduled'}</div>
+            <div className="text-3 text-xs truncate">
+              {stream.length
+                ? stream.slice(0, 4).map((it) => `${it.allDay ? '' : hhmm(it.time) + ' '}${it.icon ?? ''}${it.icon ? '' : it.title.slice(0, 14)}`).join(' · ') + (stream.length > 4 ? ' …' : '')
+                : googleConnected ? (isToday ? 'A free day.' : 'Nothing on this day.') : 'Connect Google Calendar in Settings to see events here.'}
+            </div>
+          </div>
+          {googleConnected && unsavedHabitItems.length > 0 && !routineOpen && <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(99,102,241,0.18)' }}>{unsavedHabitItems.length} to save</span>}
+          <ChevronDown size={18} className="text-3 shrink-0 transition-transform" style={{ transform: routineOpen ? 'rotate(180deg)' : 'none' }} />
+        </button>
+        {routineOpen && (
+          <div className="px-2 pb-2 border-t hairline">
+            {stream.map((it) => {
             const past = !it.allDay && it.end < now
             const current = isToday && !it.allDay && it.time <= now && it.end > now
             const done = it.habitId ? isDone(idx, date, it.habitId) : false
@@ -202,8 +208,16 @@ export function Today() {
               </div>
             )
           })}
-        </Card>
-      )}
+            {stream.some((it) => it.source === 'habit') && (
+              <div className="pt-2 px-1">
+                {googleConnected
+                  ? <button className="btn btn-sm w-full" onClick={saveDayToCalendar} disabled={savingCal || unsavedHabitItems.length === 0}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : unsavedHabitItems.length ? `Save in calendar (${unsavedHabitItems.length})` : 'Saved in calendar ✓'}</button>
+                  : <button className="btn btn-sm btn-ghost text-3 w-full" onClick={() => setTab('settings')}><CalendarPlus size={14} /> Connect Google Calendar to save</button>}
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       <SectionTitle>{isToday ? 'How was today?' : `How was ${format(dateObj, 'EEEE')}?`}</SectionTitle>
       <Card>
@@ -268,9 +282,9 @@ function DayStrip({ date, todayK, onChange, rateFor }: { date: string; todayK: s
   const next = () => { const n = ymd(addDays(fromKey(date), 1)); if (n <= todayK) onChange(n) }
 
   return (
-    <div className="flex items-center gap-1 -mx-4 px-2">
-      <button className="btn btn-ghost btn-sm px-1.5" onClick={prev} aria-label="Previous day"><ChevronLeft size={18} /></button>
-      <div ref={ref} className="flex gap-1.5 overflow-x-auto no-scrollbar grow py-1 px-1">
+    <div className="flex items-center gap-0.5 -mx-4 px-2">
+      <button className="btn btn-ghost btn-sm px-1" onClick={prev} aria-label="Previous day"><ChevronLeft size={16} /></button>
+      <div ref={ref} className="flex gap-1 overflow-x-auto no-scrollbar grow py-0.5 px-0.5">
         {days.map((d) => {
           const k = ymd(d)
           const sel = k === date
@@ -278,21 +292,20 @@ function DayStrip({ date, todayK, onChange, rateFor }: { date: string; todayK: s
           return (
             <button
               key={k} data-day={k} onClick={() => onChange(k)}
-              className="shrink-0 w-11 flex flex-col items-center gap-0.5 rounded-2xl py-1.5 press transition-colors"
+              className="shrink-0 w-8 flex flex-col items-center rounded-xl py-1 press transition-colors"
               style={{
-                background: sel ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'var(--glass)',
+                background: sel ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'transparent',
                 color: sel ? 'white' : 'var(--text)',
-                border: `1px solid ${sel ? 'transparent' : 'var(--glass-border)'}`,
               }}
             >
-              <span className="text-[10px] font-semibold uppercase" style={{ opacity: 0.75 }}>{format(d, 'EEEEE')}</span>
-              <span className={`text-[15px] leading-tight ${k === todayK ? 'font-bold' : 'font-medium'}`}>{d.getDate()}</span>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: sel ? 'rgba(255,255,255,0.9)' : rateColor(rate) }} />
+              <span className="text-[9px] font-semibold uppercase leading-none" style={{ opacity: 0.7 }}>{format(d, 'EEEEE')}</span>
+              <span className={`text-[13px] leading-tight ${k === todayK ? 'font-bold' : 'font-medium'}`}>{d.getDate()}</span>
+              <span className="w-1 h-1 rounded-full mt-0.5" style={{ background: sel ? 'rgba(255,255,255,0.9)' : rateColor(rate) }} />
             </button>
           )
         })}
       </div>
-      <button className="btn btn-ghost btn-sm px-1.5" onClick={next} disabled={date >= todayK} aria-label="Next day"><ChevronRight size={18} /></button>
+      <button className="btn btn-ghost btn-sm px-1" onClick={next} disabled={date >= todayK} aria-label="Next day"><ChevronRight size={16} /></button>
     </div>
   )
 }
