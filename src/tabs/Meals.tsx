@@ -35,7 +35,7 @@ export function Meals() {
   const recipes = useStore((s) => s.recipes)
   const mealPlans = useStore((s) => s.mealPlans)
   const kronanToken = useStore((s) => s.kronanToken)
-  const { updateMealPlan, unplanMeal, addIngredientsToGroceries, scheduleMealPrep, showToast, setTab } = useStore()
+  const { updateMealPlan, unplanMeal, showToast, setTab } = useStore()
 
   const thisMonday = ymd(weekStart(new Date()))
   const nextMonday = ymd(addDays(weekStart(new Date()), 7))
@@ -43,15 +43,11 @@ export function Meals() {
   const [open, setOpen] = useState<Recipe | null>(null)
   const [adding, setAdding] = useState(false)
   const [pushing, setPushing] = useState(false)
+  const [prepOpen, setPrepOpen] = useState(false)
 
   const plans = useMemo(() => mealPlans.filter((m) => m.week_start === week).sort((a, b) => (a.day ?? 9) - (b.day ?? 9)), [mealPlans, week])
   const total = plans.reduce((a, p) => { const r = recipes.find((x) => x.id === p.recipe_id); return r ? a + planCost(p, r) : a }, 0)
   const weekLabel = `${format(new Date(week + 'T00:00:00'), 'MMM d')} – ${format(addDays(new Date(week + 'T00:00:00'), 6), 'MMM d')}`
-
-  const toGroceries = () => {
-    const n = addIngredientsToGroceries(plans.map((p) => ({ recipe_id: p.recipe_id, servings: p.servings })))
-    showToast(n ? `${n} item${n > 1 ? 's' : ''} added to Groceries` : 'Groceries already up to date')
-  }
 
   const pushToKronan = async () => {
     if (!kronanToken) return
@@ -117,8 +113,7 @@ export function Meals() {
         )}
 
         <div className="flex flex-wrap gap-2 mt-3">
-          <button className="btn btn-sm" onClick={toGroceries} disabled={!plans.length}><ShoppingCart size={14} /> Ingredients → Groceries</button>
-          <button className="btn btn-sm" onClick={() => { scheduleMealPrep(week); showToast('Meal prep scheduled for Sunday') }}><CalendarDays size={14} /> Schedule Sunday prep</button>
+          <button className="btn btn-sm btn-primary" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule Sunday prep</button>
           {kronanToken && <button className="btn btn-sm" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send week to Krónan'}</button>}
         </div>
         {!kronanToken && <p className="text-3 text-[11px] mt-2">Connect Krónan in <button className="underline" onClick={() => setTab('settings')}>Settings</button> to browse their recipes with live prices and macros, and push shopping lists to your account.</p>}
@@ -151,6 +146,86 @@ export function Meals() {
       <Sheet open={adding} onClose={() => setAdding(false)} title="Add recipe" tall>
         {adding && <AddRecipe onDone={() => setAdding(false)} />}
       </Sheet>
+      <Sheet open={prepOpen} onClose={() => setPrepOpen(false)} title="Sunday meal prep" tall>
+        {prepOpen && <SundayPrep week={week} weekLabel={weekLabel} plans={plans} onDone={() => setPrepOpen(false)} />}
+      </Sheet>
+    </div>
+  )
+}
+
+/* ------------------------------ Sunday prep picker ------------------------------ */
+
+function SundayPrep({ week, weekLabel, plans, onDone }: { week: string; weekLabel: string; plans: MealPlan[]; onDone: () => void }) {
+  const recipes = useStore((s) => s.recipes)
+  const { planMeal, updateMealPlan, unplanMeal, scheduleMealPrep, addIngredientsToGroceries, showToast } = useStore()
+  // Pre-select what is already planned for the week, with its servings.
+  const [sel, setSel] = useState<Map<string, number>>(() => new Map(plans.map((p) => [p.recipe_id, p.servings])))
+  const [time, setTime] = useState('14:00')
+
+  const toggle = (r: Recipe) => setSel((cur) => { const m = new Map(cur); if (m.has(r.id)) m.delete(r.id); else m.set(r.id, r.servings); return m })
+  const setServ = (id: string, n: number) => setSel((cur) => new Map(cur).set(id, Math.max(1, n)))
+
+  const chosen = recipes.filter((r) => sel.has(r.id))
+  const total = chosen.reduce((a, r) => a + Math.round((r.est_cost * (sel.get(r.id) ?? r.servings)) / Math.max(1, r.servings)), 0)
+  const portions = chosen.reduce((a, r) => a + (sel.get(r.id) ?? 0), 0)
+
+  const confirm = () => {
+    for (const p of plans) {
+      const want = sel.get(p.recipe_id)
+      if (want === undefined) unplanMeal(p.id)
+      else if (want !== p.servings) updateMealPlan(p.id, { servings: want })
+    }
+    for (const r of chosen) if (!plans.some((p) => p.recipe_id === r.id)) planMeal(r.id, week, 6, sel.get(r.id))
+    scheduleMealPrep(week, time)
+    const n = addIngredientsToGroceries(chosen.map((r) => ({ recipe_id: r.id, servings: sel.get(r.id) ?? r.servings })))
+    showToast(`Sunday prep set · ${chosen.length} recipe${chosen.length === 1 ? '' : 's'}, ${n} item${n === 1 ? '' : 's'} added to Groceries`)
+    onDone()
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-2 text-sm">Pick what you’ll cook on Sunday for the week of <b>{weekLabel}</b>. Confirming plans the meals, books the prep block on Sunday and fills your Groceries list.</p>
+
+      <div className="flex flex-col gap-2">
+        {recipes.map((r) => {
+          const on = sel.has(r.id)
+          const serv = sel.get(r.id) ?? r.servings
+          const cost = Math.round((r.est_cost * serv) / Math.max(1, r.servings))
+          const m = recipeMacros(r, serv / Math.max(1, r.servings))
+          return (
+            <div key={r.id} className="glass p-2 flex items-center gap-2" style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
+              <button onClick={() => toggle(r)} className="flex items-center gap-2 grow min-w-0 text-left">
+                <CheckCircle checked={on} size={24} color="#22c55e" />
+                {r.image ? <img src={r.image} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" loading="lazy" /> : <span className="w-10 h-10 rounded-lg bg-line shrink-0 inline-flex items-center justify-center">🍽️</span>}
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">{r.title}</div>
+                  <div className="text-3 text-[11px]">{isk(cost)}{m.known ? ` · ${r0(m.total.kcal / Math.max(1, serv))} kcal/serv` : ''}</div>
+                </div>
+              </button>
+              {on && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button className="btn btn-sm !px-2" onClick={() => setServ(r.id, serv - 1)}>−</button>
+                  <span className="w-7 text-center text-sm font-bold tabular-nums">{serv}</span>
+                  <button className="btn btn-sm !px-2" onClick={() => setServ(r.id, serv + 1)}>+</button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="glass p-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs text-2">Prep block on Sunday at</div>
+          <input className="field mt-1 !w-auto !py-1" type="time" value={time} onChange={(e) => setTime(e.target.value || '14:00')} />
+        </div>
+        <div className="text-right">
+          <div className="text-xl font-bold">{isk(total)}</div>
+          <div className="text-3 text-[11px]">{chosen.length} recipe{chosen.length === 1 ? '' : 's'} · {portions} portion{portions === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+
+      <button className="btn btn-primary py-3" onClick={confirm} disabled={chosen.length === 0}><Check size={18} /> Confirm Sunday prep</button>
     </div>
   )
 }
