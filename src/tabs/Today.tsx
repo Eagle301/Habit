@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
+import { CalendarPlus, ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
 import { useStore, useActiveHabits } from '../store/useStore'
 import type { Habit } from '../lib/types'
 import { todayKey, format, fmtTime, combine, hhmm, fromKey, addDays, subDays, ymd } from '../lib/dates'
@@ -20,7 +20,8 @@ export function Today() {
   const reflections = useStore((s) => s.reflections)
   const googleConnected = useStore((s) => s.googleConnected)
   const loadEvents = useStore((s) => s.loadEvents)
-  const { toggleHabit, setReflection, setReflectionNote } = useStore()
+  const { toggleHabit, setReflection, setReflectionNote, scheduleBlock, syncBlocksToGoogle, showToast, setTab } = useStore()
+  const [savingCal, setSavingCal] = useState(false)
 
   const user = useStore((s) => s.user)
   const todayK = todayKey()
@@ -82,6 +83,29 @@ export function Today() {
   const onTap = (h: Habit) => {
     if (h.sub_habits.length && !isDone(idx, date, h.id)) setSubFor(h)
     else toggleHabit(h.id, date)
+  }
+
+  /** Habit items in the stream that are not yet Google events: existing blocks without an event,
+   *  plus timed daily habits that have no block for this day at all. */
+  const unsavedHabitItems = stream.filter((it) => it.source === 'habit' && (it.key.startsWith('d-') || !dayBlocks.find((b) => b.id === it.key)?.google_event_id))
+  const saveDayToCalendar = async () => {
+    setSavingCal(true)
+    const ids: string[] = []
+    for (const it of stream) {
+      if (it.source !== 'habit' || !it.habitId) continue
+      if (it.key.startsWith('d-')) {
+        // timed daily habit without a block: create one (this also pushes it to Google)
+        const h = habits.find((x) => x.id === it.habitId)
+        if (h?.default_time) scheduleBlock(h.id, date, h.default_time, h.duration_min)
+      } else if (!dayBlocks.find((b) => b.id === it.key)?.google_event_id) {
+        ids.push(it.key)
+      }
+    }
+    const { ok, failed } = await syncBlocksToGoogle(ids)
+    setSavingCal(false)
+    const created = stream.filter((it) => it.key.startsWith('d-')).length
+    const total = ok + created
+    showToast(failed ? `${total} saved, ${failed} failed · see Settings` : total ? `${total} item${total === 1 ? '' : 's'} saved to Google Calendar` : 'Already in your calendar')
   }
 
   return (
@@ -147,7 +171,13 @@ export function Today() {
         </>
       )}
 
-      <SectionTitle>Schedule</SectionTitle>
+      <SectionTitle right={
+        stream.some((it) => it.source === 'habit') ? (
+          googleConnected
+            ? <button className="btn btn-sm" onClick={saveDayToCalendar} disabled={savingCal || (unsavedHabitItems.length === 0)}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : unsavedHabitItems.length ? `Save to calendar (${unsavedHabitItems.length})` : 'In calendar ✓'}</button>
+            : <button className="btn btn-sm btn-ghost text-3" onClick={() => setTab('settings')}><CalendarPlus size={14} /> Connect calendar</button>
+        ) : undefined
+      }>Schedule</SectionTitle>
       {stream.length === 0 ? (
         <Card><div className="text-2 text-sm">Nothing scheduled {isToday ? 'today' : 'that day'}. {googleConnected ? '' : 'Connect Google Calendar in Settings to see your events here.'}</div></Card>
       ) : (
@@ -162,7 +192,7 @@ export function Today() {
                 <div className="w-1 self-stretch rounded-full" style={{ background: it.color ?? '#4285F4' }} />
                 <div className="grow min-w-0">
                   <div className={`font-medium truncate ${done ? 'line-through text-3' : ''}`}>{it.icon ? `${it.icon} ` : ''}{it.title}</div>
-                  <div className="text-3 text-xs">{it.source === 'google' ? 'Google Calendar' : 'Habit'}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
+                  <div className="text-3 text-xs">{it.source === 'google' ? 'Google Calendar' : dayBlocks.find((b) => b.id === it.key)?.google_event_id ? 'Habit · 📅 in calendar' : 'Habit'}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
                 </div>
                 {it.habitId && (
                   <button onClick={() => { const h = habits.find((x) => x.id === it.habitId); if (h) onTap(h) }} aria-label="Toggle">

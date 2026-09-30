@@ -100,6 +100,8 @@ interface Actions {
   setGoogleConnected: (v: boolean) => void
   loadEvents: (from: Date, to: Date, force?: boolean) => Promise<void>
   syncBlockToGoogle: (block: ScheduledBlock) => Promise<void>
+  /** Push (create or update) the Google events for the given blocks. Returns how many succeeded. */
+  syncBlocksToGoogle: (blockIds: string[]) => Promise<{ ok: number; failed: number }>
 }
 
 export type Store = DataState & UIState & Actions
@@ -337,7 +339,7 @@ export const useStore = create<Store>()(
           }
           set({ blocks: [...get().blocks, b] })
           db.upsert('scheduled_blocks', b)
-          if (get().googleConnected) void get().syncBlockToGoogle(b)
+          if (get().googleConnected) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
           return b
         },
         moveBlock: (id, date, start_time) => {
@@ -346,7 +348,7 @@ export const useStore = create<Store>()(
           const row = blocks.find((b) => b.id === id)
           if (row) {
             db.upsert('scheduled_blocks', row)
-            if (get().googleConnected) void get().syncBlockToGoogle(row)
+            if (get().googleConnected) void get().syncBlockToGoogle(row).catch(() => { /* surfaced via googleError */ })
           }
         },
         deleteBlock: (id) => {
@@ -477,7 +479,17 @@ export const useStore = create<Store>()(
             const msg = e instanceof Error ? e.message : String(e)
             set({ googleError: msg })
             if (e instanceof google.GoogleAuthError) set({ googleConnected: false })
+            throw e
           }
+        },
+        syncBlocksToGoogle: async (blockIds) => {
+          let ok = 0, failed = 0
+          for (const id of blockIds) {
+            const block = get().blocks.find((b) => b.id === id)
+            if (!block) continue
+            try { await get().syncBlockToGoogle(block); ok++ } catch { failed++; if (!get().googleConnected) break }
+          }
+          return { ok, failed }
         },
       }
     },

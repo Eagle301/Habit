@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
-import { ChevronLeft, ChevronRight, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { CalendarPlus, ChevronLeft, ChevronRight, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { useStore, useActiveHabits } from '../store/useStore'
 import type { CalendarEvent, Habit, ScheduledBlock } from '../lib/types'
 import { addDays, format, isSunday, minutesToTime, timeToMinutes, todayKey, weekDays, weekStart, ymd, combine, startOfMonth, endOfMonth } from '../lib/dates'
@@ -19,7 +19,8 @@ export function Planner() {
   const events = useStore((s) => s.events)
   const googleConnected = useStore((s) => s.googleConnected)
   const eventsLoading = useStore((s) => s.eventsLoading)
-  const { loadEvents, scheduleBlock, moveBlock, deleteBlock, showToast, setTab, setListsMode } = useStore()
+  const { loadEvents, scheduleBlock, moveBlock, deleteBlock, showToast, setTab, setListsMode, syncBlocksToGoogle } = useStore()
+  const [savingCal, setSavingCal] = useState(false)
   const mealPlans = useStore((s) => s.mealPlans)
   const recipes = useStore((s) => s.recipes)
 
@@ -137,6 +138,15 @@ export function Planner() {
   const dismissBanner = () => { try { localStorage.setItem(SETUP_DISMISS_KEY, format(new Date(), 'yyyy-ww')) } catch { /* ignore */ } setBannerDismissed(true) }
   const planNextWeek = () => { setAnchor(addDays(weekStart(new Date()), 7)); setSetupOpen(true) }
 
+  const unsynced = weekBlocks.filter((b) => !b.google_event_id).length
+  const saveWeekToCalendar = async () => {
+    if (!weekBlocks.length) { showToast('Nothing planned this week yet'); return }
+    setSavingCal(true)
+    const { ok, failed } = await syncBlocksToGoogle(weekBlocks.map((b) => b.id))
+    setSavingCal(false)
+    showToast(failed ? `${ok} saved, ${failed} failed · see Settings` : `${ok} block${ok === 1 ? '' : 's'} saved to Google Calendar`)
+  }
+
   const weekMeals = mealPlans.filter((m) => m.week_start === weekKeys[0])
   const weekMealCost = weekMeals.reduce((a, m) => { const r = recipes.find((x) => x.id === m.recipe_id); return r ? a + Math.round((r.est_cost * m.servings) / Math.max(1, r.servings)) : a }, 0)
   const goToMeals = () => { setListsMode('meals'); setTab('lists') }
@@ -174,6 +184,12 @@ export function Planner() {
               const k = ymd(d)
               return <DayColumn key={k} date={k} day={d} blocks={blocks.filter((b) => b.date === k)} habits={habits} eventCount={(eventsByDay.get(k) ?? []).length} selected={k === selectedDay} onSelect={() => setSelectedDay(k)} />
             })}
+          </div>
+          <div className="flex items-center justify-between mt-2 pt-2 border-t hairline">
+            <span className="text-3 text-[11px]">{weekBlocks.length} block{weekBlocks.length === 1 ? '' : 's'}{googleConnected && unsynced ? ` · ${unsynced} not in calendar` : ''}</span>
+            {googleConnected
+              ? <button className="btn btn-sm" onClick={saveWeekToCalendar} disabled={savingCal || !weekBlocks.length}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : 'Save week to calendar'}</button>
+              : <button className="btn btn-sm btn-ghost text-3" onClick={() => setTab('settings')}><CalendarPlus size={14} /> Connect calendar</button>}
           </div>
         </Card>
 
