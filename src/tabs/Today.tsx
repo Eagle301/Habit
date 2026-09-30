@@ -41,8 +41,10 @@ export function Today() {
   const dayBlocks = useMemo(() => blocks.filter((b) => b.date === date), [blocks, date])
   const blockHabitIds = new Set(dayBlocks.map((b) => b.habit_id))
 
-  const scheduled = habits.filter((h) => h.frequency === 'daily' || blockHabitIds.has(h.id))
-  const flexible = habits.filter((h) => h.frequency !== 'daily' && !blockHabitIds.has(h.id))
+  const extras = habits.filter((h) => h.is_extra)
+  const goalHabits = habits.filter((h) => !h.is_extra)
+  const scheduled = goalHabits.filter((h) => h.frequency === 'daily' || blockHabitIds.has(h.id))
+  const flexible = goalHabits.filter((h) => h.frequency !== 'daily' && !blockHabitIds.has(h.id))
   // Every habit listed counts towards the ring. A flexible habit whose weekly/monthly target is
   // already met (and wasn't done that day) is left out so it doesn't drag the day down.
   const counted = [
@@ -66,7 +68,7 @@ export function Today() {
       items.push({ key: b.id, time: t, end: new Date(t.getTime() + b.duration_min * 60000), title: h.name, icon: h.icon, color: h.color, source: 'habit', habitId: h.id })
     }
     for (const h of habits) {
-      if (h.frequency === 'daily' && h.default_time && !blockHabitIds.has(h.id)) {
+      if (h.frequency === 'daily' && h.default_time && !blockHabitIds.has(h.id) && !h.is_extra) {
         const t = combine(date, h.default_time)
         items.push({ key: `d-${h.id}`, time: t, end: new Date(t.getTime() + h.duration_min * 60000), title: h.name, icon: h.icon, color: h.color, source: 'habit', habitId: h.id })
       }
@@ -133,8 +135,8 @@ export function Today() {
             {progress >= 1 && counted.length > 0 ? 'All done! 🎉' : doneCount === 0 ? (isToday ? 'Let’s get started' : 'Nothing logged') : 'Keep it going'}
           </div>
           <div className="text-2 text-sm mt-1">{doneCount} of {counted.length} habits done</div>
-          {allHabits.length > 0 && (
-            <div className="text-3 text-xs mt-2 inline-flex items-center gap-1"><Flame size={14} className="text-orange-500" /> Best streak {Math.max(0, ...allHabits.map((h) => habitStreak(idx, h)))} days</div>
+          {goalHabits.length > 0 && (
+            <div className="text-3 text-xs mt-2 inline-flex items-center gap-1"><Flame size={14} className="text-orange-500" /> Best streak {Math.max(0, ...goalHabits.map((h) => habitStreak(idx, h)))} days</div>
           )}
         </div>
       </Card>
@@ -168,6 +170,15 @@ export function Today() {
           <SectionTitle>{isToday ? 'Anytime this week' : 'Flexible habits'}</SectionTitle>
           <div className="flex flex-col gap-2">
             {flexible.map((h) => <HabitRow key={h.id} habit={h} done={isDone(idx, date, h.id)} sub={idx.get(date)?.get(h.id)?.sub_habit ?? null} streak={habitStreak(idx, h)} onTap={() => onTap(h)} periodInfo={`${periodCompletions(idx, h, date)}/${h.target_count} this ${h.frequency === 'weekly' ? 'week' : 'month'}`} />)}
+          </div>
+        </>
+      )}
+
+      {extras.length > 0 && (
+        <>
+          <SectionTitle right={<span className="text-3 text-[11px]">not counted</span>}>🎈 Extras</SectionTitle>
+          <div className="flex flex-col gap-2">
+            {extras.map((h) => <HabitRow key={h.id} habit={h} done={isDone(idx, date, h.id)} sub={idx.get(date)?.get(h.id)?.sub_habit ?? null} streak={habitStreak(idx, h)} onTap={() => onTap(h)} periodInfo={h.frequency !== 'daily' ? `${periodCompletions(idx, h, date)}/${h.target_count} this ${h.frequency === 'weekly' ? 'week' : 'month'}` : undefined} />)}
           </div>
         </>
       )}

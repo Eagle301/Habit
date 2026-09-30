@@ -273,7 +273,7 @@ function HabitRowSortable({ habit, onEdit, onArchive }: { habit: Habit; onEdit: 
         <span className="text-xl w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${habit.color}22` }}>{habit.icon}</span>
         <div className="min-w-0">
           <div className="font-medium text-sm truncate">{habit.name}</div>
-          <div className="text-3 text-xs">{habit.frequency === 'daily' ? 'Daily' : `${habit.target_count}× / ${habit.frequency === 'weekly' ? 'week' : 'month'}`}{habit.sub_habits.length ? ` · ${habit.sub_habits.length} options` : ''}</div>
+          <div className="text-3 text-xs">{habit.is_extra ? '🎈 Extra · ' : ''}{habit.frequency === 'daily' ? 'Daily' : `${habit.target_count}× / ${habit.frequency === 'weekly' ? 'week' : 'month'}`}{habit.sub_habits.length ? ` · ${habit.sub_habits.length} options` : ''}</div>
         </div>
       </button>
       <button className="btn btn-sm" onClick={onArchive} aria-label="Archive"><Archive size={14} /></button>

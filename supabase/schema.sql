@@ -225,3 +225,6 @@ returns boolean language sql security definer stable set search_path = public as
       and (refresh_token is not null or (expires_at is not null and expires_at > now()))
   );
 $$;
+
+-- "Extra" trackers: logged for fun, excluded from the daily goal and analytics.
+alter table public.habits add column if not exists is_extra boolean not null default false;

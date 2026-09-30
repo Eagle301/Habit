@@ -3,7 +3,7 @@ import { Plus, X } from 'lucide-react'
 import type { Frequency, Habit } from '../lib/types'
 import { useStore } from '../store/useStore'
 import { Sheet } from './ui/Sheet'
-import { HABIT_COLORS, HABIT_ICONS, Segment } from './ui/Bits'
+import { HABIT_COLORS, HABIT_ICONS, Segment, Toggle } from './ui/Bits'
 
 interface Props {
   open: boolean
@@ -13,7 +13,7 @@ interface Props {
 
 const blank = (): Omit<Habit, 'id' | 'user_id' | 'created_at' | 'sort_order'> => ({
   name: '', icon: '✅', color: '#6366f1', frequency: 'daily', target_count: 3, sub_habits: [],
-  default_time: null, duration_min: 30, archived: false,
+  default_time: null, duration_min: 30, archived: false, is_extra: false,
 })
 
 export function HabitEditor({ open, onClose, habit }: Props) {
@@ -95,6 +95,14 @@ function EditorBody({ habit, onClose }: { habit: Habit | null; onClose: () => vo
             <span className="text-sm text-2">times per {form.frequency === 'weekly' ? 'week' : 'month'}</span>
           </div>
         )}
+      </div>
+
+      <div className="glass p-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="font-semibold text-sm">🎈 Extra tracker</div>
+          <div className="text-3 text-xs">Just for fun: gets its own streak but never counts toward your daily goal or stats.</div>
+        </div>
+        <Toggle on={!!form.is_extra} onChange={(v) => set('is_extra', v)} />
       </div>
 
       <div className="grid grid-cols-2 gap-3">

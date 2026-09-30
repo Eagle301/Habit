@@ -25,12 +25,13 @@ export function CalendarTab() {
   const monthRate = monthCompletionRate(habits, idx, days)
   const corr = useMemo(() => moodCorrelation(habits, idx, reflections), [habits, idx, reflections])
   const perfect = perfectDayStreak(habits, idx)
-  const streaks = habits.map((h) => ({ h, s: habitStreak(idx, h) })).sort((a, b) => b.s - a.s)
+  const streaks = habits.map((h) => ({ h, s: habitStreak(idx, h) })).sort((a, b) => Number(!!a.h.is_extra) - Number(!!b.h.is_extra) || b.s - a.s)
 
   // Day inspector
   const selHabits = activeHabitsOn(allHabits, selected)
-  const completed = selHabits.filter((h) => isDone(idx, selected, h.id))
-  const missed = selHabits.filter((h) => h.frequency === 'daily' && !isDone(idx, selected, h.id))
+  const completed = selHabits.filter((h) => !h.is_extra && isDone(idx, selected, h.id))
+  const missed = selHabits.filter((h) => !h.is_extra && h.frequency === 'daily' && !isDone(idx, selected, h.id))
+  const extrasDone = selHabits.filter((h) => h.is_extra && isDone(idx, selected, h.id))
   const selMood = moods.get(selected)
   const selRate = dayRate(habits, idx, selected)
 
@@ -118,6 +119,13 @@ export function CalendarTab() {
                 <span className="text-xs">missed</span>
               </div>
             ))}
+            {extrasDone.map((h) => (
+              <div key={h.id} className="flex items-center gap-2 text-sm text-2">
+                <span className="w-5 h-5 rounded-full flex items-center justify-center text-[11px]" style={{ background: `${h.color}33` }}>🎈</span>
+                <span>{h.icon} {h.name}</span>
+                <span className="text-xs text-3">extra</span>
+              </div>
+            ))}
           </div>
         )}
       </Card>
@@ -141,7 +149,7 @@ export function CalendarTab() {
             {streaks.slice(0, 6).map(({ h, s }) => (
               <div key={h.id} className="flex items-center gap-2 text-sm">
                 <span>{h.icon}</span>
-                <span className="grow truncate">{h.name}</span>
+                <span className="grow truncate">{h.name}{h.is_extra && <span className="text-3 text-[10px] ml-1">🎈 extra</span>}</span>
                 <span className="font-semibold inline-flex items-center gap-1" style={{ color: s > 0 ? h.color : 'var(--text-3)' }}>
                   <Flame size={14} />{s} {h.frequency === 'daily' ? 'd' : h.frequency === 'weekly' ? 'w' : 'mo'}
                 </span>

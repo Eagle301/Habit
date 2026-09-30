@@ -448,7 +448,7 @@ export const useStore = create<Store>()(
         scheduleMealPrep: (week_start, time = '14:00') => {
           let habit = get().habits.find((h) => h.name.toLowerCase() === 'meal prep')
           if (!habit) {
-            get().addHabit({ name: 'Meal prep', icon: '🥗', color: '#22c55e', frequency: 'weekly', target_count: 1, sub_habits: [], default_time: time, duration_min: 90, archived: false })
+            get().addHabit({ name: 'Meal prep', icon: '🥗', color: '#22c55e', frequency: 'weekly', target_count: 1, sub_habits: [], default_time: time, duration_min: 90, archived: false, is_extra: false })
             habit = get().habits.find((h) => h.name.toLowerCase() === 'meal prep')
           }
           if (!habit) return

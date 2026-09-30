@@ -16,9 +16,12 @@ export const indexLogs = (logs: HabitLog[]): LogIndex => {
 
 export const isDone = (idx: LogIndex, date: string, habitId: string) => !!idx.get(date)?.get(habitId)
 
-/** Habits considered "due" on a date: daily always; weekly/monthly only if they have a schedule/log that day or are still under target. */
+/** Habits that existed (and weren't archived) on a date. Includes extras; callers filter those as needed. */
 export const activeHabitsOn = (habits: Habit[], date: string) =>
   habits.filter((h) => !h.archived && h.created_at.slice(0, 10) <= date)
+
+/** Same, but only habits that count toward the daily goal. */
+export const goalHabitsOn = (habits: Habit[], date: string) => activeHabitsOn(habits, date).filter((h) => !h.is_extra)
 
 /** Count of completions for a weekly/monthly habit within its current period containing `date`. */
 export const periodCompletions = (idx: LogIndex, habit: Habit, date: string) => {
@@ -35,7 +38,7 @@ export const periodCompletions = (idx: LogIndex, habit: Habit, date: string) => 
  * days it was completed. Completing extra habits therefore never pushes a day past what was actually done.
  */
 export const dayRate = (habits: Habit[], idx: LogIndex, date: string): number | null => {
-  const active = activeHabitsOn(habits, date)
+  const active = goalHabitsOn(habits, date)
   const daily = active.filter((h) => h.frequency === 'daily')
   const doneDaily = daily.filter((h) => isDone(idx, date, h.id)).length
   const otherDone = active.filter((h) => h.frequency !== 'daily' && isDone(idx, date, h.id)).length

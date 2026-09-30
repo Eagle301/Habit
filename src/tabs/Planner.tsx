@@ -40,6 +40,7 @@ export function Planner() {
   const queue = useMemo<QueueCard[]>(() => {
     const cards: QueueCard[] = []
     for (const h of habits) {
+      if (h.is_extra) continue
       if (h.frequency === 'weekly') {
         const n = weekBlocks.filter((b) => b.habit_id === h.id).length
         if (h.target_count - n > 0) cards.push({ id: `q-${h.id}`, habit: h, remaining: h.target_count - n, scope: 'week' })

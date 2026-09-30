@@ -15,6 +15,8 @@ export interface Habit {
   duration_min: number
   sort_order: number
   archived: boolean
+  /** "Just for fun" tracker: logged and streaked, but never counted toward the daily goal. */
+  is_extra?: boolean
   created_at: string
 }
 
