@@ -468,6 +468,7 @@ function CookMode({ recipe, servings, onBack }: { recipe: Recipe; servings: numb
 }
 
 function IngredientInfo({ i }: { i: RecipeIngredient }) {
+  const s = i.source
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
@@ -475,7 +476,7 @@ function IngredientInfo({ i }: { i: RecipeIngredient }) {
         <div>
           <div className="font-semibold">{i.name}</div>
           <div className="text-2 text-sm">{i.price ? `${isk(i.price)} per pack` : 'price unknown'}</div>
-          {i.pack_g && <div className="text-3 text-xs">{i.pack_g} {i.unit === 'ml' ? 'ml' : 'g'} per pack</div>}
+          <div className="text-3 text-xs">{i.pack_g ? `${i.pack_g} ${i.unit === 'ml' ? 'ml' : 'g'} per pack` : 'pack size unknown'}</div>
         </div>
       </div>
       {i.macros ? <div><div className="text-3 text-xs font-semibold uppercase tracking-wide mb-1">Per 100 g</div><MacroPills m={i.macros} /></div> : <div className="text-3 text-sm">No nutrition data.</div>}
@@ -483,6 +484,20 @@ function IngredientInfo({ i }: { i: RecipeIngredient }) {
         <table className="text-sm w-full">
           <tbody>{Object.entries(i.nutrition).map(([k, v]) => <tr key={k} className="border-b hairline"><td className="py-1 text-2">{k}</td><td className="py-1 text-right font-medium">{String(v)}</td></tr>)}</tbody>
         </table>
+      )}
+      {s && (
+        <details>
+          <summary className="text-3 text-xs cursor-pointer">Krónan data behind the pack size</summary>
+          <table className="text-xs w-full mt-1">
+            <tbody>
+              {[
+                ['price', isk(s.price)], ['pricePerKilo', s.pricePerKilo ?? '—'], ['baseComparisonUnit', s.baseComparisonUnit ?? '—'],
+                ['qtyPerBaseCompUnit', s.qtyPerBaseCompUnit ?? '—'], ['qtyInSalesUnit', s.qtyInSalesUnit ?? '—'], ['chargedByWeight', String(s.chargedByWeight)],
+                ['price ÷ pricePerKilo', s.pricePerKilo ? `${(s.price / s.pricePerKilo).toFixed(3)} ${s.baseComparisonUnit ?? ''}` : '—'],
+              ].map(([k, v]) => <tr key={String(k)} className="border-b hairline"><td className="py-0.5 text-2">{k}</td><td className="py-0.5 text-right font-mono">{String(v)}</td></tr>)}
+            </tbody>
+          </table>
+        </details>
       )}
       <a className="btn btn-sm" href={kronan.kronanSearchUrl(i.name)} target="_blank" rel="noreferrer"><ExternalLink size={14} /> View at kronan.is</a>
     </div>
@@ -726,8 +741,14 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState<Map<string, kronan.KSearchHit>>(new Map())
+  const [info, setInfo] = useState<kronan.KSearchHit | null>(null)
   const sentinel = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const mergeDetail = (p: kronan.KSearchHit) => {
+    const d = details.get(p.sku)
+    // Details add nutrition + pack size; the search hit keeps the authoritative name, price and sale info.
+    return d ? ({ ...d, name: p.name, price: p.price, thumbnail: p.thumbnail || d.thumbnail, detail: p.detail } as kronan.KProductDetail) : p
+  }
 
   const fetchDetails = (skus: string[]) => {
     kronan.getProductDetails(kronanToken, skus).then((m) => setDetails((cur) => new Map([...cur, ...m]))).catch(() => { /* optional */ })
@@ -762,12 +783,7 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
   const toggle = (p: kronan.KSearchHit) => setPicked((cur) => { const m = new Map(cur); if (m.has(p.sku)) m.delete(p.sku); else m.set(p.sku, p); return m })
 
   const finish = () => {
-    const out = [...picked.values()].map((p) => {
-      const d = details.get(p.sku)
-      // Details add nutrition + pack size; the search hit keeps the authoritative name, price and sale info.
-      const merged = d ? ({ ...d, name: p.name, price: p.price, thumbnail: p.thumbnail || d.thumbnail, detail: p.detail } as kronan.KProductDetail) : p
-      return kronan.productToIngredient(merged, 1)
-    })
+    const out = [...picked.values()].map((p) => kronan.productToIngredient(mergeDetail(p), 1))
     onDone(out)
   }
 
@@ -792,17 +808,27 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
           const m = kronan.parseMacros(d?.nutrition)
           const on = picked.has(p.sku)
           return (
-            <button key={p.sku} onClick={() => toggle(p)} className="glass overflow-hidden flex flex-col text-left press relative" style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
-              {on && <span className="absolute top-1 right-1 w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center animate-pop"><Check size={14} strokeWidth={3} /></span>}
-              <div className="w-full aspect-square bg-white flex items-center justify-center overflow-hidden">
-                {p.thumbnail ? <img src={p.thumbnail} alt="" className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">🛒</span>}
+            <div key={p.sku} className="glass overflow-hidden flex flex-col" style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
+              <div className="relative">
+                <button onClick={() => toggle(p)} className="block w-full press" aria-pressed={on}>
+                  <div className="w-full aspect-square bg-white flex items-center justify-center overflow-hidden">
+                    {p.thumbnail ? <img src={p.thumbnail} alt="" className="w-full h-full object-contain" loading="lazy" /> : <span className="text-2xl">🛒</span>}
+                  </div>
+                </button>
+                {on && <span className="absolute top-1 right-1 w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center animate-pop pointer-events-none"><Check size={14} strokeWidth={3} /></span>}
+                <button
+                  onClick={() => setInfo(p)}
+                  className="absolute bottom-1 right-1 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold italic press"
+                  style={{ background: 'rgba(15,23,42,0.7)', color: 'white' }}
+                  aria-label={`Details for ${p.name}`}
+                >i</button>
               </div>
-              <div className="p-1.5">
+              <button onClick={() => toggle(p)} className="p-1.5 text-left w-full press">
                 <div className="text-[11px] leading-tight line-clamp-2 min-h-[2.4em]">{p.name}</div>
                 <div className="font-bold text-[13px] mt-0.5">{isk(kronan.effectivePrice(p))}</div>
                 <div className="text-[10px]" style={{ color: m ? '#ea580c' : 'var(--text-3)' }}>{m ? `${r0(m.kcal)} kcal/100g` : d ? 'no macros' : '…'}</div>
-              </div>
-            </button>
+              </button>
+            </div>
           )
         })}
       </div>
@@ -815,6 +841,15 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
           <Check size={18} /> Add {picked.size || ''} item{picked.size === 1 ? '' : 's'}
         </button>
       </div>
+
+      <Sheet open={!!info} onClose={() => setInfo(null)} title={info?.name ?? ''}>
+        {info && (
+          <div className="flex flex-col gap-3">
+            <IngredientInfo i={kronan.productToIngredient(mergeDetail(info), 1)} />
+            <button className="btn btn-primary" onClick={() => { if (!picked.has(info.sku)) toggle(info); setInfo(null) }}>{picked.has(info.sku) ? 'Selected ✓' : 'Select this item'}</button>
+          </div>
+        )}
+      </Sheet>
     </div>
   )
 }

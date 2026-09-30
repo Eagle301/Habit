@@ -124,6 +124,8 @@ export interface RecipeIngredient {
   nutrition?: Record<string, string> | null
   /** Parsed macros per 100 g. */
   macros?: Macros | null
+  /** Raw Krónan pricing/size fields the pack size was derived from (for inspection). */
+  source?: { price: number; pricePerKilo: number | null; baseComparisonUnit: string | null; qtyPerBaseCompUnit: number | null; qtyInSalesUnit: number | null; chargedByWeight: boolean } | null
 }
 
 export interface Recipe {

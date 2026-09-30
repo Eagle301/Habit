@@ -172,29 +172,51 @@ const plausible = (g: number) => g >= 5 && g <= 25000
 
 /**
  * Grams (or ml) in ONE sales unit (one "stk").
- * Krónan's qtyPerBaseCompUnit is the amount per unit expressed in baseComparisonUnit, so it is
- * multiplied by 1000 only for kg / l and used as-is for g, ml and stk. When the field is missing the
- * weight printed in the product name is used, then price ÷ pricePerKilo. Items sold by weight
- * ("kg") count as 1000 g per unit.
+ *
+ * Krónan's fields are not consistent across suppliers: qtyPerBaseCompUnit is sometimes "kg per unit"
+ * (0.7), sometimes raw grams (700) and sometimes "units per kg". So every reading is treated as a
+ * candidate and checked against the one signal that is always self-consistent: price ÷ pricePerKilo.
+ * The candidate closest to that reference wins; without a reference the name weight, then the
+ * plausible readings, are used. Items sold by weight count as 1000 g per unit.
  */
 export function packGrams(p: KProductDetail | KProduct): number | null {
   if (p.chargedByWeight) return 1000
   const unit = (p.baseComparisonUnit || '').toLowerCase()
   const perBase = /^(kg|l|ltr)$/.test(unit) ? 1000 : 1
 
+  const ref = p.pricePerKilo && p.price && /^(kg|l|ltr|g|ml)$/.test(unit) ? (p.price / p.pricePerKilo) * perBase : null
+  const reference = ref && plausible(ref) ? ref : null
+
+  const candidates: number[] = []
+  const byName = weightFromName(p.name)
+  if (byName && plausible(byName)) candidates.push(byName)
   const q = (p as KProductDetail).qtyPerBaseCompUnit
   if (q && q > 0) {
-    const g = q * perBase
-    if (plausible(g)) return Math.round(g)
+    for (const g of [q * perBase, q, perBase / q]) if (plausible(g)) candidates.push(g)
   }
-  const byName = weightFromName(p.name)
-  if (byName && plausible(byName)) return byName
-  if (p.pricePerKilo && p.price && /^(kg|l|ltr|g|ml)$/.test(unit)) {
-    const g = (p.price / p.pricePerKilo) * perBase
-    if (plausible(g)) return Math.round(g)
+
+  if (reference !== null) {
+    const within = (c: number) => Math.abs(c - reference) / reference <= 0.25
+    // A weight printed in the name is exact; take it whenever it agrees with the price reference.
+    if (byName && plausible(byName) && within(byName)) return byName
+    let best: number | null = null, bestErr = Infinity
+    for (const c of candidates) {
+      const err = Math.abs(c - reference) / reference
+      if (err < bestErr) { best = c; bestErr = err }
+    }
+    // Otherwise the candidate closest to the reference, or the reference itself if none is close.
+    return Math.round(best !== null && bestErr <= 0.25 ? best : reference)
   }
-  return null
+  return candidates.length ? Math.round(candidates[0]) : null
 }
+
+/** The raw Krónan fields a pack size is derived from; kept on the ingredient for inspection. */
+export type PackSource = { price: number; pricePerKilo: number | null; baseComparisonUnit: string | null; qtyPerBaseCompUnit: number | null; qtyInSalesUnit: number | null; chargedByWeight: boolean }
+export const packSource = (p: KProductDetail | KProduct): PackSource => ({
+  price: p.price, pricePerKilo: p.pricePerKilo ?? null, baseComparisonUnit: p.baseComparisonUnit ?? null,
+  qtyPerBaseCompUnit: (p as KProductDetail).qtyPerBaseCompUnit ?? null, qtyInSalesUnit: (p as KProductDetail).qtyInSalesUnit ?? null,
+  chargedByWeight: !!p.chargedByWeight,
+})
 
 /**
  * Ingredient model: `qty` + `unit` is the amount USED in the dish (g, ml or stk). Packages to buy are
@@ -270,6 +292,7 @@ export async function enrichIngredients(token: string, ings: RecipeIngredient[])
       ...n, ...upgraded, pack_g, nutrition, macros: parseMacros(nutrition),
       price: effectivePrice(d) || i.price,
       thumbnail: i.thumbnail || d.thumbnail || null,
+      source: packSource(d),
     }
   })
 }
@@ -322,7 +345,7 @@ export const productToIngredient = (p: KProduct | KSearchHit | KProductDetail, p
   return {
     name: p.name, qty, unit, price: effectivePrice(p),
     sku: p.sku, thumbnail: p.thumbnail || null, note,
-    used_qty: null, pack_g, nutrition, macros: parseMacros(nutrition),
+    used_qty: null, pack_g, nutrition, macros: parseMacros(nutrition), source: packSource(p),
   }
 }
 
