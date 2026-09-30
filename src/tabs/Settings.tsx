@@ -63,7 +63,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
   }
   const disconnectGoogle = async () => {
     if (!supabase || !s.user) return
-    await supabase.from('google_tokens').delete().eq('user_id', s.user.id)
+    await supabase.rpc('delete_google_token')
     clearGoogleCache()
     s.setGoogleConnected(false)
     useStore.setState({ events: [], eventsRange: null })
@@ -158,7 +158,12 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
               <button className="btn btn-sm btn-danger" onClick={disconnectGoogle}>Disconnect</button>
             </>
           ) : (
-            <button className="btn btn-primary btn-sm" onClick={connectGoogle}>Connect Google Calendar</button>
+            <>
+              <button className="btn btn-primary btn-sm" onClick={connectGoogle}>Connect Google Calendar</button>
+              {s.user.providers.includes('google') && !s.googleError && (
+                <p className="text-3 text-[11px] w-full">You signed in with Google but no calendar token was stored. Press Connect and approve the calendar permission on Google’s screen.</p>
+              )}
+            </>
           )}
         </div>
       </Card>
@@ -219,9 +224,16 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
       <Card className="flex flex-col gap-3">
         {hasSupabase ? (
           s.user ? (
-            <div className="flex items-center justify-between">
-              <div><div className="font-semibold text-sm">{s.user.email ?? 'Signed in'}</div><div className="text-3 text-xs">Synced with Supabase</div></div>
-              <button className="btn btn-sm" onClick={() => s.signOut()}><LogOut size={14} /> Sign out</button>
+            <div className="flex items-center gap-3">
+              {s.user.avatar
+                ? <img src={s.user.avatar} alt="" className="w-12 h-12 rounded-full object-cover shrink-0" referrerPolicy="no-referrer" />
+                : <div className="w-12 h-12 rounded-full shrink-0 flex items-center justify-center font-bold text-white" style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}>{(s.user.name || s.user.email || '?').slice(0, 1).toUpperCase()}</div>}
+              <div className="grow min-w-0">
+                <div className="font-semibold text-[15px] truncate">{s.user.name ?? 'Signed in'}</div>
+                <div className="text-2 text-xs truncate">{s.user.email}</div>
+                <div className="text-3 text-[11px]">Synced · signed in with {s.user.providers.length ? s.user.providers.join(', ') : 'email'}</div>
+              </div>
+              <button className="btn btn-sm shrink-0" onClick={() => s.signOut()}><LogOut size={14} /> Sign out</button>
             </div>
           ) : (
             <div className="flex items-center justify-between">

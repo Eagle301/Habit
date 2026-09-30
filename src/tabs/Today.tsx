@@ -10,6 +10,7 @@ import { Card, CheckCircle, Empty, Header, SectionTitle } from '../components/ui
 import { HabitEditor } from '../components/HabitEditor'
 
 const STRIP_DAYS = 21
+const greeting = () => { const h = new Date().getHours(); return h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening' }
 
 export function Today() {
   const allHabits = useActiveHabits()
@@ -21,6 +22,7 @@ export function Today() {
   const loadEvents = useStore((s) => s.loadEvents)
   const { toggleHabit, setReflection, setReflectionNote } = useStore()
 
+  const user = useStore((s) => s.user)
   const todayK = todayKey()
   const [date, setDate] = useState(todayK)
   const isToday = date === todayK
@@ -85,7 +87,7 @@ export function Today() {
   return (
     <div>
       <Header
-        subtitle={format(dateObj, 'EEEE, MMM d')}
+        subtitle={isToday && user?.name ? `${greeting()}, ${user.name.split(' ')[0]} · ${format(dateObj, 'EEE, MMM d')}` : format(dateObj, 'EEEE, MMM d')}
         title={isToday ? 'Today' : format(dateObj, 'MMM d')}
         right={
           isToday

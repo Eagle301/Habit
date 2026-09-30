@@ -10,7 +10,14 @@ import { supabase } from '../lib/supabase'
 import * as google from '../lib/google'
 import { todayKey, weekStart, weekEnd, addDays, ymd } from '../lib/dates'
 
-export interface User { id: string; email: string | null }
+export interface User {
+  id: string
+  email: string | null
+  name: string | null
+  avatar: string | null
+  /** Linked identity providers, e.g. ['email', 'google']. */
+  providers: string[]
+}
 
 interface DataState extends CloudData {}
 

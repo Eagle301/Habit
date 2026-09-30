@@ -22,23 +22,36 @@ export default function App() {
     const sb = supabase
     const handle = async (session: import('@supabase/supabase-js').Session | null, event?: string) => {
       if (!session) { setUser(null); return }
-      setUser({ id: session.user.id, email: session.user.email ?? null })
+      const meta = (session.user.user_metadata ?? {}) as Record<string, string | undefined>
+      setUser({
+        id: session.user.id,
+        email: session.user.email ?? null,
+        name: meta.full_name || meta.name || null,
+        avatar: meta.avatar_url || meta.picture || null,
+        providers: (session.user.app_metadata?.providers as string[] | undefined) ?? [],
+      })
       seedProviderToken(session.provider_token)
-      // On a fresh Google OAuth sign-in Supabase exposes the refresh token exactly once: persist it.
-      if (session.provider_refresh_token) {
-        const { error } = await sb.from('google_tokens').upsert({
-          user_id: session.user.id,
-          refresh_token: session.provider_refresh_token,
-          access_token: session.provider_token ?? null,
-          expires_at: new Date(Date.now() + 55 * 60 * 1000).toISOString(),
-          updated_at: new Date().toISOString(),
+      // Right after a Google OAuth round-trip Supabase exposes the Google tokens exactly once: persist them
+      // server-side. The refresh token only arrives when Google re-consents (prompt=consent), so a
+      // missing one keeps whatever is already stored.
+      if (session.provider_token || session.provider_refresh_token) {
+        const { error } = await sb.rpc('save_google_token', {
+          p_refresh: session.provider_refresh_token ?? null,
+          p_access: session.provider_token ?? null,
+          p_expires: new Date(Date.now() + 55 * 60 * 1000).toISOString(),
         })
-        if (!error) setGoogleConnected(true)
+        if (error) {
+          console.error('[google] could not save token', error)
+          useStore.setState({ googleError: `Could not save Google token: ${error.message}` })
+        } else {
+          setGoogleConnected(true)
+        }
       }
       if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
         await loadCloud()
-        const { data } = await sb.rpc('has_google_token')
-        if (typeof data === 'boolean') setGoogleConnected(data)
+        const { data, error } = await sb.rpc('has_google_token')
+        if (error) console.error('[google] has_google_token failed', error)
+        else if (typeof data === 'boolean') setGoogleConnected(data)
       }
     }
     sb.auth.getSession().then(({ data }) => handle(data.session, 'INITIAL_SESSION'))
