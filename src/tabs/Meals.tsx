@@ -112,7 +112,7 @@ export function Meals() {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2 mt-3">
+        <div className="flex flex-wrap justify-center gap-2 mt-3">
           <button className="btn btn-sm btn-primary" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule Sunday prep</button>
           {kronanToken && <button className="btn btn-sm" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send week to Krónan'}</button>}
         </div>
