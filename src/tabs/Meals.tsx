@@ -693,8 +693,8 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
                   {i.pack_g ? ` · ${i.pack_g} ${i.unit === 'ml' ? 'ml' : 'g'}/pack` : ''}
                 </div>
               </div>
-              <input className="field !w-16 !py-1.5 !px-2 text-sm text-right" type="number" min={0} step="any" value={i.qty} onChange={(e) => setIng(n, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
-              <select className="field !w-auto !py-1.5 !px-1.5 text-sm" value={i.unit} onChange={(e) => setIng(n, { unit: e.target.value })} aria-label="Unit">
+              <input className="field no-spin !w-[4.75rem] shrink-0 !py-1.5 !px-2 text-sm text-right tabular-nums" type="number" inputMode="decimal" min={0} step="any" value={i.qty} onChange={(e) => setIng(n, { qty: Number(e.target.value) || 0 })} aria-label="Quantity" />
+              <select className="field !w-auto shrink-0 !py-1.5 !px-1.5 text-sm" value={i.unit} onChange={(e) => setIng(n, { unit: e.target.value })} aria-label="Unit">
                 <option value="g">g</option><option value="ml">ml</option><option value="stk">stk</option>
               </select>
               <button className="text-3 p-1" onClick={() => setIngs((a) => a.filter((_, k) => k !== n))} aria-label="Remove"><Trash2 size={15} /></button>

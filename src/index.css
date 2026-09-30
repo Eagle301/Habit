@@ -122,6 +122,10 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 }
 .field:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.2); }
 
+/* Numeric fields without the browser spinner, so the digits get the full width. */
+.no-spin { -moz-appearance: textfield; appearance: textfield; }
+.no-spin::-webkit-outer-spin-button, .no-spin::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border-radius: 14px; padding: 10px 14px; font-weight: 600; cursor: pointer;
