@@ -112,9 +112,9 @@ export function Meals() {
           </div>
         )}
 
-        <div className="flex flex-wrap justify-center gap-2 mt-3">
-          <button className="btn btn-sm btn-primary" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule prep</button>
-          {kronanToken && <button className="btn btn-sm" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send to Krónan'}</button>}
+        <div className="flex gap-2 mt-3">
+          <button className="btn btn-sm btn-primary grow" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule prep</button>
+          {kronanToken && <button className="btn btn-sm grow" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send to Krónan'}</button>}
         </div>
         {!kronanToken && <p className="text-3 text-[11px] mt-2">Connect Krónan in <button className="underline" onClick={() => setTab('settings')}>Settings</button> to browse their recipes with live prices and macros, and push shopping lists to your account.</p>}
       </Card>
@@ -146,7 +146,7 @@ export function Meals() {
       <Sheet open={adding} onClose={() => setAdding(false)} title="Add recipe" tall>
         {adding && <AddRecipe onDone={() => setAdding(false)} />}
       </Sheet>
-      <Sheet open={prepOpen} onClose={() => setPrepOpen(false)} title="Sunday meal prep" tall>
+      <Sheet open={prepOpen} onClose={() => setPrepOpen(false)} title="Sunday meal prep" tall scroll={false}>
         {prepOpen && <SundayPrep week={week} weekLabel={weekLabel} plans={plans} onDone={() => setPrepOpen(false)} />}
       </Sheet>
     </div>
@@ -161,6 +161,14 @@ function SundayPrep({ week, weekLabel, plans, onDone }: { week: string; weekLabe
   // Pre-select what is already planned for the week, with its servings.
   const [sel, setSel] = useState<Map<string, number>>(() => new Map(plans.map((p) => [p.recipe_id, p.servings])))
   const [time, setTime] = useState('14:00')
+  const [filter, setFilter] = useState('')
+  const compact = recipes.length > 5
+  // Selected recipes stay on top so they never scroll out of sight while filtering the rest.
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    const list = q ? recipes.filter((r) => r.title.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q))) : recipes
+    return [...list].sort((a, b) => Number(sel.has(b.id)) - Number(sel.has(a.id)) || a.title.localeCompare(b.title))
+  }, [recipes, filter, sel])
 
   const toggle = (r: Recipe) => setSel((cur) => { const m = new Map(cur); if (m.has(r.id)) m.delete(r.id); else m.set(r.id, r.servings); return m })
   const setServ = (id: string, n: number) => setSel((cur) => new Map(cur).set(id, Math.max(1, n)))
@@ -183,23 +191,33 @@ function SundayPrep({ week, weekLabel, plans, onDone }: { week: string; weekLabe
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-2 text-sm">Pick what you’ll cook on Sunday for the week of <b>{weekLabel}</b>. Confirming plans the meals, books the prep block on Sunday and fills your Groceries list.</p>
+    <div className="flex flex-col gap-3 grow min-h-0">
+      <p className="text-2 text-sm shrink-0">Pick what you’ll cook on Sunday for the week of <b>{weekLabel}</b>. Confirming plans the meals, books the prep block on Sunday, fills your Groceries list and adds a “Shop for meal prep” to-do.</p>
 
-      <div className="flex flex-col gap-2">
-        {recipes.map((r) => {
+      {compact && (
+        <div className="relative shrink-0">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-3" />
+          <input className="field !pl-9" placeholder={`Search ${recipes.length} recipes…`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+      )}
+
+      {/* Only this list scrolls; the footer below is outside it, so rows can never appear under the button. */}
+      <div className={`overflow-y-auto overscroll-contain grow min-h-0 -mx-4 px-4 py-0.5 flex flex-col ${compact ? 'gap-1' : 'gap-2'}`}>
+        {visible.length === 0 && <div className="text-3 text-sm py-2 text-center">No recipe matches “{filter}”.</div>}
+        {visible.map((r) => {
           const on = sel.has(r.id)
           const serv = sel.get(r.id) ?? r.servings
           const cost = Math.round((r.est_cost * serv) / Math.max(1, r.servings))
           const m = recipeMacros(r, serv / Math.max(1, r.servings))
+          const img = compact ? 'w-8 h-8' : 'w-10 h-10'
           return (
-            <div key={r.id} className="glass p-2 flex items-center gap-2" style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
+            <div key={r.id} className={`glass flex items-center gap-2 ${compact ? 'p-1.5' : 'p-2'}`} style={{ outline: on ? '2px solid #22c55e' : 'none' }}>
               <button onClick={() => toggle(r)} className="flex items-center gap-2 grow min-w-0 text-left">
-                <CheckCircle checked={on} size={24} color="#22c55e" />
-                {r.image ? <img src={r.image} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" loading="lazy" /> : <span className="w-10 h-10 rounded-lg bg-line shrink-0 inline-flex items-center justify-center">🍽️</span>}
+                <CheckCircle checked={on} size={compact ? 22 : 24} color="#22c55e" />
+                {r.image ? <img src={r.image} alt="" className={`${img} rounded-lg object-cover shrink-0`} loading="lazy" /> : <span className={`${img} rounded-lg bg-line shrink-0 inline-flex items-center justify-center`}>🍽️</span>}
                 <div className="min-w-0">
                   <div className="text-sm font-medium truncate">{r.title}</div>
-                  <div className="text-3 text-[11px]">{isk(cost)}{m.known ? ` · ${r0(m.total.kcal / Math.max(1, serv))} kcal/serv` : ''}</div>
+                  <div className="text-3 text-[11px] truncate">{isk(cost)}{m.known ? ` · ${r0(m.total.kcal / Math.max(1, serv))} kcal/serv` : ''}</div>
                 </div>
               </button>
               {on && (
@@ -214,18 +232,19 @@ function SundayPrep({ week, weekLabel, plans, onDone }: { week: string; weekLabe
         })}
       </div>
 
-      <div className="glass p-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-xs text-2">Prep block on Sunday at</div>
-          <input className="field mt-1 !w-auto !py-1" type="time" value={time} onChange={(e) => setTime(e.target.value || '14:00')} />
+      <div className="shrink-0 flex flex-col gap-3 pt-1 border-t hairline">
+        <div className="glass p-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs text-2">Prep block on Sunday at</div>
+            <input className="field mt-1 !w-auto !py-1" type="time" value={time} onChange={(e) => setTime(e.target.value || '14:00')} />
+          </div>
+          <div className="text-right">
+            <div className="text-xl font-bold">{isk(total)}</div>
+            <div className="text-3 text-[11px]">{chosen.length} recipe{chosen.length === 1 ? '' : 's'} · {portions} portion{portions === 1 ? '' : 's'}</div>
+          </div>
         </div>
-        <div className="text-right">
-          <div className="text-xl font-bold">{isk(total)}</div>
-          <div className="text-3 text-[11px]">{chosen.length} recipe{chosen.length === 1 ? '' : 's'} · {portions} portion{portions === 1 ? '' : 's'}</div>
-        </div>
+        <button className="btn btn-primary py-3" onClick={confirm} disabled={chosen.length === 0}><Check size={18} /> Confirm Sunday prep</button>
       </div>
-
-      <button className="btn btn-primary py-3" onClick={confirm} disabled={chosen.length === 0}><Check size={18} /> Confirm Sunday prep</button>
     </div>
   )
 }
@@ -677,7 +696,7 @@ function KronanRecipeSearch({ onDone }: { onDone: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex gap-2">
-        <input className="field" placeholder="Search recipes… (empty = browse all)" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
+        <input className="field" placeholder="Search recipes…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
         <button className="btn btn-primary" onClick={search} disabled={busy}><Search size={16} /></button>
       </div>
       {error && <div className="text-xs p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>{error}</div>}
@@ -872,7 +891,6 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
         </div>
       </div>
       <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-4 px-4">
-        <button className={`btn btn-sm shrink-0 ${active === '' ? 'btn-primary' : ''}`} onClick={() => search('')}>⭐ Mine</button>
         {PRESETS.map((p) => <button key={p} className={`btn btn-sm shrink-0 ${active === p ? 'btn-primary' : ''}`} onClick={() => search(p)}>{p}</button>)}
       </div>
       {error && <div className="text-xs p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>{error}</div>}

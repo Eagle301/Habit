@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { CalendarEvent, Habit, ScheduledBlock } from './types'
+import type { CalendarEvent, ScheduledBlock } from './types'
 import { combine } from './dates'
 
 const API = 'https://www.googleapis.com/calendar/v3'
@@ -117,23 +117,26 @@ export async function listEvents(timeMin: Date, timeMax: Date): Promise<Calendar
   return out.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 }
 
-const blockBody = (block: ScheduledBlock, habit: Habit) => {
+/** What the mirrored event is called; a Habit satisfies this, and so does a project look. */
+export interface EventLook { icon: string; name: string; kind?: 'habit' | 'project' | 'task' }
+
+const blockBody = (block: ScheduledBlock, look: EventLook) => {
   const start = combine(block.date, block.start_time)
   const end = new Date(start.getTime() + block.duration_min * 60_000)
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   return {
-    summary: `${habit.icon} ${habit.name}`,
-    description: 'Scheduled from Habits',
+    summary: `${look.icon} ${look.name}`,
+    description: look.kind === 'project' ? 'Study session · scheduled from Habits' : look.kind === 'task' ? 'To-do · scheduled from Habits' : 'Scheduled from Habits',
     start: { dateTime: start.toISOString(), timeZone: tz },
     end: { dateTime: end.toISOString(), timeZone: tz },
-    extendedProperties: { private: { app: APP_TAG, blockId: block.id, habitId: habit.id } },
+    extendedProperties: { private: { app: APP_TAG, blockId: block.id, habitId: block.habit_id ?? '', projectId: block.project_id ?? '' } },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] },
   }
 }
 
 /** Create or update the Google event that mirrors a scheduled block. Returns the event id. */
-export async function upsertBlockEvent(block: ScheduledBlock, habit: Habit): Promise<string> {
-  const body = JSON.stringify(blockBody(block, habit))
+export async function upsertBlockEvent(block: ScheduledBlock, look: EventLook): Promise<string> {
+  const body = JSON.stringify(blockBody(block, look))
   if (block.google_event_id) {
     try {
       const e = await gfetch<GEvent>(`/calendars/primary/events/${block.google_event_id}`, { method: 'PATCH', body })

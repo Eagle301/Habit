@@ -1,9 +1,9 @@
 import { supabase } from './supabase'
-import type { Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Recipe, Reflection, ScheduledBlock } from './types'
+import type { Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Project, Recipe, Reflection, ScheduledBlock, Task } from './types'
 
 export type Table =
   | 'habits' | 'habit_logs' | 'reflections' | 'goals' | 'goal_tasks' | 'lists' | 'list_items' | 'scheduled_blocks'
-  | 'recipes' | 'meal_plans'
+  | 'recipes' | 'meal_plans' | 'projects' | 'tasks'
 
 export interface CloudData {
   habits: Habit[]
@@ -16,6 +16,8 @@ export interface CloudData {
   blocks: ScheduledBlock[]
   recipes: Recipe[]
   mealPlans: MealPlan[]
+  projects: Project[]
+  tasks: Task[]
 }
 
 const report = (op: string, table: string) => (res: { error: unknown }) => {
@@ -43,7 +45,7 @@ export const db = {
   },
   async loadAll(): Promise<CloudData | null> {
     if (!supabase) return null
-    const [h, l, r, g, gt, li, lit, b, rc, mp] = await Promise.all([
+    const [h, l, r, g, gt, li, lit, b, rc, mp, pj, tk] = await Promise.all([
       supabase.from('habits').select('*').order('sort_order'),
       supabase.from('habit_logs').select('*'),
       supabase.from('reflections').select('*'),
@@ -54,9 +56,14 @@ export const db = {
       supabase.from('scheduled_blocks').select('*'),
       supabase.from('recipes').select('*').order('created_at'),
       supabase.from('meal_plans').select('*'),
+      supabase.from('projects').select('*').order('sort_order'),
+      supabase.from('tasks').select('*').order('sort_order'),
     ])
     const err = [h, l, r, g, gt, li, lit, b, rc, mp].find((x) => x.error)?.error
     if (err) { console.error('[db] loadAll failed', err); return null }
+    // Projects arrived in migration 0006: a missing table must not block everything else.
+    if (pj.error) console.error('[db] loadAll projects failed (run supabase/migrations/0006_projects.sql)', pj.error)
+    if (tk.error) console.error('[db] loadAll tasks failed (run supabase/migrations/0007_tasks.sql)', tk.error)
     return {
       habits: (h.data ?? []) as Habit[],
       logs: (l.data ?? []) as HabitLog[],
@@ -68,6 +75,8 @@ export const db = {
       blocks: (b.data ?? []) as ScheduledBlock[],
       recipes: (rc.data ?? []) as Recipe[],
       mealPlans: (mp.data ?? []) as MealPlan[],
+      projects: ((pj.data ?? []) as Project[]).map((p) => ({ ...p, hours_est: Number(p.hours_est) })),
+      tasks: (tk.data ?? []) as Task[],
     }
   },
   /** Push an entire local dataset (used on first sign-in to migrate local-only data). */
@@ -85,6 +94,8 @@ export const db = {
     await step('goal_tasks', d.goalTasks)
     await step('lists', d.lists)
     await step('list_items', d.listItems)
+    await step('projects', d.projects)
+    await step('tasks', d.tasks)
     await step('scheduled_blocks', d.blocks)
     await step('recipes', d.recipes)
     await step('meal_plans', d.mealPlans)
@@ -113,7 +124,7 @@ export const db = {
     const { data } = await supabase.auth.getUser()
     const uid = data.user?.id
     if (!uid) return
-    for (const t of ['meal_plans', 'recipes', 'scheduled_blocks', 'list_items', 'lists', 'goal_tasks', 'goals', 'reflections', 'habit_logs', 'habits'] as Table[]) {
+    for (const t of ['meal_plans', 'recipes', 'scheduled_blocks', 'tasks', 'projects', 'list_items', 'lists', 'goal_tasks', 'goals', 'reflections', 'habit_logs', 'habits'] as Table[]) {
       await supabase.from(t).delete().eq('user_id', uid)
     }
   },

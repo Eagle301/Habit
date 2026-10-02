@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DndContext, PointerSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Archive, ArchiveRestore, Download, GripVertical, LogOut, Moon, Plus, RefreshCw, Sun, Trash2, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, Briefcase, Download, GripVertical, LogOut, Moon, Plus, RefreshCw, Sun, Trash2, Upload } from 'lucide-react'
 import { useStore } from '../store/useStore'
 import type { Habit } from '../lib/types'
 import { supabase, hasSupabase } from '../lib/supabase'
@@ -11,6 +11,7 @@ import * as kronan from '../lib/kronan'
 import { db, type CloudData } from '../lib/db'
 import { Card, Header, SectionTitle, Toggle } from '../components/ui/Bits'
 import { HabitEditor } from '../components/HabitEditor'
+import { ReminderCard } from '../components/ReminderCard'
 
 export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void }) {
   const s = useStore()
@@ -97,7 +98,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
     const data: CloudData & { exported_at: string; version: number } = {
       version: 1, exported_at: new Date().toISOString(),
       habits: s.habits, logs: s.logs, reflections: s.reflections, goals: s.goals, goalTasks: s.goalTasks,
-      lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans,
+      lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
@@ -114,7 +115,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
       const data: CloudData = {
         habits: stamp(raw.habits), logs: stamp(raw.logs), reflections: stamp(raw.reflections), goals: stamp(raw.goals),
         goalTasks: stamp(raw.goalTasks), lists: stamp(raw.lists), listItems: stamp(raw.listItems), blocks: stamp(raw.blocks),
-        recipes: stamp(raw.recipes), mealPlans: stamp(raw.mealPlans),
+        recipes: stamp(raw.recipes), mealPlans: stamp(raw.mealPlans), projects: stamp(raw.projects), tasks: stamp(raw.tasks),
       }
       if (!confirm(`Import ${data.habits.length} habits, ${data.logs.length} logs, ${data.lists.length} lists? This merges into your current data.`)) return
       // merge by id
@@ -123,7 +124,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
         habits: merge(s.habits, data.habits), logs: merge(s.logs, data.logs), reflections: merge(s.reflections, data.reflections),
         goals: merge(s.goals, data.goals), goalTasks: merge(s.goalTasks, data.goalTasks), lists: merge(s.lists, data.lists),
         listItems: merge(s.listItems, data.listItems), blocks: merge(s.blocks, data.blocks),
-        recipes: merge(s.recipes, data.recipes), mealPlans: merge(s.mealPlans, data.mealPlans),
+        recipes: merge(s.recipes, data.recipes), mealPlans: merge(s.mealPlans, data.mealPlans), projects: merge(s.projects, data.projects), tasks: merge(s.tasks, data.tasks),
       }
       s.replaceAll(merged)
       if (s.user) await db.pushAll(data)
@@ -135,7 +136,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
   const wipe = async () => {
     if (!confirm('Delete ALL habits, logs, goals and lists? This cannot be undone.')) return
     if (!confirm('Really delete everything?')) return
-    s.replaceAll({ habits: [], logs: [], reflections: [], goals: [], goalTasks: [], lists: [], listItems: [], blocks: [], recipes: [], mealPlans: [] })
+    s.replaceAll({ habits: [], logs: [], reflections: [], goals: [], goalTasks: [], lists: [], listItems: [], blocks: [], recipes: [], mealPlans: [], projects: [], tasks: [] })
     if (s.user) await db.wipeAll()
     s.showToast('All data deleted')
   }
@@ -151,6 +152,40 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
           <div><div className="font-semibold">Dark mode</div><div className="text-3 text-xs">Glass looks great either way</div></div>
         </div>
         <Toggle on={s.theme === 'dark'} onChange={(v) => s.setTheme(v ? 'dark' : 'light')} />
+      </Card>
+
+      {/* Daily reminder */}
+      <SectionTitle>Notifications</SectionTitle>
+      <ReminderCard onLeaveLocalMode={onLeaveLocalMode} />
+
+      {/* Work hours */}
+      <SectionTitle>Work hours</SectionTitle>
+      <Card>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Briefcase size={20} />
+            <div><div className="font-semibold">Keep the planner out of work</div><div className="text-3 text-xs">Auto-fill and day drops avoid these hours. A habit with its own ideal time, like gym at 12:00, is still placed there.</div></div>
+          </div>
+          <Toggle on={s.workHours.enabled} onChange={(v) => s.setWorkHours({ enabled: v })} />
+        </div>
+        {s.workHours.enabled && (
+          <div className="mt-3 flex flex-col gap-3">
+            <div className="flex gap-1.5">
+              {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d, i) => {
+                const on = s.workHours.days.includes(i)
+                return (
+                  <button key={d} type="button" onClick={() => s.setWorkHours({ days: on ? s.workHours.days.filter((x) => x !== i) : [...s.workHours.days, i].sort() })}
+                    className="grow py-1.5 rounded-lg text-xs font-semibold press" style={{ background: on ? 'var(--color-accent)' : 'var(--line)', color: on ? 'white' : 'var(--text-2)' }}>{d}</button>
+                )
+              })}
+            </div>
+            <div className="flex items-center gap-2 text-sm text-2">
+              <input className="field" type="time" value={s.workHours.start} onChange={(e) => s.setWorkHours({ start: e.target.value })} />
+              <span>to</span>
+              <input className="field" type="time" value={s.workHours.end} onChange={(e) => s.setWorkHours({ end: e.target.value })} />
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Google Calendar */}

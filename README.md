@@ -90,11 +90,26 @@ in, saved per user in the `kronan_tokens` table (RLS: owner only) so it is resto
 or device. Run `supabase/migrations/0002_meals.sql` (recipes, meal plans) and
 `supabase/migrations/0005_kronan_tokens.sql`, or the combined `supabase/schema.sql`.
 
+## 3c. Daily reminder (push notifications)
+
+Settings → Notifications → **Daily reminder** sends a push at the chosen local time listing the daily
+habits not done yet (nothing is sent when all are done). It needs a signed-in account.
+
+1. Run `supabase/migrations/0008_push_reminders.sql` (`push_subscriptions`, `reminder_settings`).
+2. Generate VAPID keys once: `npx web-push generate-vapid-keys`.
+3. Netlify env: `VITE_VAPID_PUBLIC_KEY` (public key), `VAPID_PRIVATE_KEY` (private key, server only),
+   `VAPID_SUBJECT` (`mailto:you@example.com`). Redeploy so the public key is built into the app.
+
+`netlify/functions/daily-reminder.ts` is a scheduled function (every 5 min, published deploy only).
+`/api/push-test` backs the **Send test** button. The service-worker handlers are in `public/push-sw.js`.
+On iPhone (iOS 16.4+) push only works from the Home Screen app, not a Safari tab.
+
 ## 4. Netlify deploy
 
 1. New site from Git → build command `npm run build`, publish directory `dist` (already in `netlify.toml`).
 2. Add environment variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`,
-   `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+   `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and for reminders
+   `VITE_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
 3. Deploy. `/api/*` is redirected to Netlify Functions; everything else falls back to `index.html`.
 
 ## 5. iPhone Home Screen

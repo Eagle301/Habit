@@ -9,10 +9,15 @@ interface Props {
   children: React.ReactNode
   /** Full-height sheet (for editors) vs. compact drawer. */
   tall?: boolean
+  /**
+   * Default: the whole body scrolls. Set false when the child manages its own scroll region, e.g. a
+   * list that scrolls under a footer that must stay fixed and never have content peek out below it.
+   */
+  scroll?: boolean
 }
 
 /** iOS-style bottom sheet with drag-to-dismiss. */
-export function Sheet({ open, onClose, title, children, tall }: Props) {
+export function Sheet({ open, onClose, title, children, tall, scroll = true }: Props) {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -23,12 +28,12 @@ export function Sheet({ open, onClose, title, children, tall }: Props) {
 
   return (
     <AnimatePresence>
-      {open && <SheetBody onClose={onClose} title={title} tall={tall}>{children}</SheetBody>}
+      {open && <SheetBody onClose={onClose} title={title} tall={tall} scroll={scroll}>{children}</SheetBody>}
     </AnimatePresence>
   )
 }
 
-function SheetBody({ onClose, title, tall, children }: Omit<Props, 'open'>) {
+function SheetBody({ onClose, title, tall, scroll, children }: Omit<Props, 'open'>) {
   // While the sheet is animating out it must not intercept taps meant for the page underneath.
   const isPresent = useIsPresent()
   const pe = isPresent ? undefined : ('none' as const)
@@ -59,7 +64,9 @@ function SheetBody({ onClose, title, tall, children }: Omit<Props, 'open'>) {
               <X size={16} />
             </button>
           </div>
-          <div className="overflow-y-auto overscroll-contain px-4 pb-6 grow min-h-0">{children}</div>
+          {scroll
+            ? <div className="overflow-y-auto overscroll-contain px-4 pb-6 grow min-h-0">{children}</div>
+            : <div className="flex flex-col px-4 pb-4 grow min-h-0">{children}</div>}
         </div>
       </motion.div>
     </>

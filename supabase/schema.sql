@@ -1,4 +1,4 @@
--- Habits: full schema (0001_init … 0005_kronan_tokens). Safe to re-run.
+-- Habits: full schema (0001_init … 0007_tasks). Safe to re-run.
 
 -- Habit Tracker schema. Every table is owned by a user and protected by RLS.
 create extension if not exists "pgcrypto";
@@ -240,4 +240,91 @@ create table if not exists public.kronan_tokens (
 alter table public.kronan_tokens enable row level security;
 drop policy if exists "kronan_tokens_owner" on public.kronan_tokens;
 create policy "kronan_tokens_owner" on public.kronan_tokens for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ---------- projects (0006) ----------
+-- School / work projects whose estimated hours are scheduled as study sessions in the Planner.
+create table if not exists public.projects (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  course text not null default '',
+  due_date date,
+  difficulty text not null default 'medium' check (difficulty in ('easy','medium','hard')),
+  hours_est numeric not null default 4,
+  session_min int not null default 60,
+  color text not null default '#0ea5e9',
+  done boolean not null default false,
+  notes text not null default '',
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists projects_user_idx on public.projects(user_id);
+alter table public.projects enable row level security;
+drop policy if exists "projects_owner" on public.projects;
+create policy "projects_owner" on public.projects for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- A scheduled block now belongs to either a habit or a project, and project sessions are ticked off directly.
+alter table public.scheduled_blocks alter column habit_id drop not null;
+alter table public.scheduled_blocks add column if not exists project_id uuid references public.projects(id) on delete cascade;
+alter table public.scheduled_blocks add column if not exists done boolean not null default false;
+alter table public.scheduled_blocks drop constraint if exists scheduled_blocks_target_chk;
+alter table public.scheduled_blocks add constraint scheduled_blocks_target_chk check (habit_id is not null or project_id is not null);
+
+-- One-time tasks: checked off once, optionally due on a date and placed in the Planner.
+create table if not exists public.tasks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  due_date date,
+  duration_min int not null default 30,
+  done boolean not null default false,
+  done_at timestamptz,
+  ref text, -- set on app-created tasks (e.g. 'meal-prep:2026-10-05') to avoid duplicates
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists tasks_user_idx on public.tasks(user_id);
+alter table public.tasks enable row level security;
+drop policy if exists "tasks_owner" on public.tasks;
+create policy "tasks_owner" on public.tasks for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- A scheduled block can now also be a task placed in the Planner.
+alter table public.scheduled_blocks add column if not exists task_id uuid references public.tasks(id) on delete cascade;
+alter table public.scheduled_blocks drop constraint if exists scheduled_blocks_target_chk;
+alter table public.scheduled_blocks add constraint scheduled_blocks_target_chk
+  check (habit_id is not null or project_id is not null or task_id is not null);
+
+-- Daily reminder push notifications.
+-- One row per device that allowed notifications (a user can have several: phone, laptop, ...).
+create table if not exists public.push_subscriptions (
+  endpoint text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now()
+);
+create index if not exists push_subscriptions_user_idx on public.push_subscriptions(user_id);
+alter table public.push_subscriptions enable row level security;
+drop policy if exists "push_subscriptions_owner" on public.push_subscriptions;
+create policy "push_subscriptions_owner" on public.push_subscriptions for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- When to remind. `time` is local wall-clock time (HH:mm) in `timezone` (IANA, e.g. Atlantic/Reykjavik).
+-- The scheduled function netlify/functions/daily-reminder.ts reads this with the service role and
+-- stamps last_sent_date so each user gets at most one reminder per local day.
+create table if not exists public.reminder_settings (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  enabled boolean not null default true,
+  time text not null default '21:00' check (time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+  timezone text not null default 'UTC',
+  last_sent_date date,
+  updated_at timestamptz not null default now()
+);
+alter table public.reminder_settings enable row level security;
+drop policy if exists "reminder_settings_owner" on public.reminder_settings;
+create policy "reminder_settings_owner" on public.reminder_settings for all to authenticated
   using (auth.uid() = user_id) with check (auth.uid() = user_id);

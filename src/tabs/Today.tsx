@@ -4,10 +4,12 @@ import { useStore, useActiveHabits } from '../store/useStore'
 import type { Habit } from '../lib/types'
 import { todayKey, format, fmtTime, combine, hhmm, fromKey, addDays, subDays, ymd } from '../lib/dates'
 import { indexLogs, isDone, habitStreak, periodCompletions, MOODS, dayRate, rateColor, activeHabitsOn } from '../lib/analytics'
+import { blockLook } from '../lib/projects'
 import { ProgressRing } from '../components/ui/ProgressRing'
 import { Sheet } from '../components/ui/Sheet'
 import { Card, CheckCircle, Empty, Header, SectionTitle } from '../components/ui/Bits'
 import { HabitEditor } from '../components/HabitEditor'
+import { Todos } from '../components/Todos'
 
 const STRIP_DAYS = 21
 const greeting = () => { const h = new Date().getHours(); return h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening' }
@@ -20,7 +22,9 @@ export function Today() {
   const reflections = useStore((s) => s.reflections)
   const googleConnected = useStore((s) => s.googleConnected)
   const loadEvents = useStore((s) => s.loadEvents)
-  const { toggleHabit, setReflection, setReflectionNote, scheduleBlock, syncBlocksToGoogle, showToast, setTab } = useStore()
+  const projects = useStore((s) => s.projects)
+  const tasks = useStore((s) => s.tasks)
+  const { toggleHabit, setReflection, setReflectionNote, scheduleBlock, syncBlocksToGoogle, showToast, setTab, toggleBlockDone } = useStore()
   const [savingCal, setSavingCal] = useState(false)
   const [routineOpen, setRoutineOpen] = useState(false)
 
@@ -60,12 +64,12 @@ export function Today() {
 
   // Schedule stream: our blocks + Google events for the selected day, merged & sorted.
   const stream = useMemo(() => {
-    const items: { key: string; time: Date; end: Date; title: string; icon?: string; color?: string; source: 'habit' | 'google'; habitId?: string; allDay?: boolean; calendar?: string }[] = []
+    const items: { key: string; time: Date; end: Date; title: string; icon?: string; color?: string; source: 'habit' | 'project' | 'task' | 'google'; habitId?: string; blockId?: string; blockDone?: boolean; allDay?: boolean; calendar?: string }[] = []
     for (const b of dayBlocks) {
-      const h = habits.find((x) => x.id === b.habit_id)
-      if (!h) continue
+      const look = blockLook(b, habits, projects, tasks)
+      if (!look) continue
       const t = combine(b.date, b.start_time)
-      items.push({ key: b.id, time: t, end: new Date(t.getTime() + b.duration_min * 60000), title: h.name, icon: h.icon, color: h.color, source: 'habit', habitId: h.id })
+      items.push({ key: b.id, time: t, end: new Date(t.getTime() + b.duration_min * 60000), title: look.name, icon: look.icon, color: look.color, source: look.kind, habitId: look.kind === 'habit' ? b.habit_id ?? undefined : undefined, blockId: b.id, blockDone: !!b.done })
     }
     for (const h of habits) {
       if (h.frequency === 'daily' && h.default_time && !blockHabitIds.has(h.id) && !h.is_extra) {
@@ -85,7 +89,7 @@ export function Today() {
       items.push({ key: e.id, time: s, end: new Date(e.end), title: e.title, source: 'google', allDay: e.allDay, color: e.color, calendar: e.calendar })
     }
     return items.sort((a, b) => (a.allDay ? -1 : b.allDay ? 1 : a.time.getTime() - b.time.getTime()))
-  }, [dayBlocks, events, habits, date]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dayBlocks, events, habits, projects, tasks, date]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const onTap = (h: Habit) => {
     if (h.sub_habits.length && !isDone(idx, date, h.id)) setSubFor(h)
@@ -94,12 +98,12 @@ export function Today() {
 
   /** Habit items in the stream that are not yet Google events: existing blocks without an event,
    *  plus timed daily habits that have no block for this day at all. */
-  const unsavedHabitItems = stream.filter((it) => it.source === 'habit' && (it.key.startsWith('d-') || !dayBlocks.find((b) => b.id === it.key)?.google_event_id))
+  const unsavedHabitItems = stream.filter((it) => it.source !== 'google' && (it.key.startsWith('d-') || !dayBlocks.find((b) => b.id === it.key)?.google_event_id))
   const saveDayToCalendar = async () => {
     setSavingCal(true)
     const ids: string[] = []
     for (const it of stream) {
-      if (it.source !== 'habit' || !it.habitId) continue
+      if (it.source === 'google') continue
       if (it.key.startsWith('d-')) {
         // timed daily habit without a block: create one (this also pushes it to Google)
         const h = habits.find((x) => x.id === it.habitId)
@@ -149,6 +153,7 @@ export function Today() {
         <p className="text-3 text-xs px-1 mt-2">Editing a past day. Tap habits to log what you did on {format(dateObj, 'EEEE')}.</p>
       )}
 
+
       {allHabits.length === 0 && (
         <div className="mt-4">
           <Empty icon="🌱" title="No habits yet" hint="Tap “+ Habit” to create your first one." />
@@ -187,6 +192,8 @@ export function Today() {
         </>
       )}
 
+      {isToday && <Todos />}
+
       <SectionTitle>Day routine</SectionTitle>
       <Card className="p-0 overflow-hidden">
         <button className="w-full flex items-center gap-3 p-3 text-left" onClick={() => setRoutineOpen(!routineOpen)} aria-expanded={routineOpen}>
@@ -206,24 +213,24 @@ export function Today() {
             {stream.map((it) => {
             const past = !it.allDay && it.end < now
             const current = isToday && !it.allDay && it.time <= now && it.end > now
-            const done = it.habitId ? isDone(idx, date, it.habitId) : false
+            const done = it.habitId ? isDone(idx, date, it.habitId) : it.source === 'project' || it.source === 'task' ? !!it.blockDone : false
             return (
               <div key={it.key} className={`flex items-center gap-3 px-2 py-2.5 rounded-xl ${current ? 'bg-line' : ''}`} style={{ opacity: past && !current && isToday ? 0.55 : 1 }}>
                 <div className="w-16 shrink-0 text-xs font-semibold text-2">{it.allDay ? 'All day' : hhmm(it.time)}</div>
                 <div className="w-1 self-stretch rounded-full" style={{ background: it.color ?? '#4285F4' }} />
                 <div className="grow min-w-0">
                   <div className={`font-medium truncate ${done ? 'line-through text-3' : ''}`}>{it.icon ? `${it.icon} ` : ''}{it.title}</div>
-                  <div className="text-3 text-xs">{it.source === 'google' ? it.calendar ?? 'Google Calendar' : dayBlocks.find((b) => b.id === it.key)?.google_event_id ? 'Habit · 📅 in calendar' : 'Habit'}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
+                  <div className="text-3 text-xs">{it.source === 'google' ? it.calendar ?? 'Google Calendar' : `${it.source === 'project' ? 'Study session' : it.source === 'task' ? 'To-do' : 'Habit'}${dayBlocks.find((b) => b.id === it.key)?.google_event_id ? ' · 📅 in calendar' : ''}`}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
                 </div>
-                {it.habitId && (
-                  <button onClick={() => { const h = habits.find((x) => x.id === it.habitId); if (h) onTap(h) }} aria-label="Toggle">
+                {(it.habitId || it.source === 'project' || it.source === 'task') && (
+                  <button onClick={() => { if ((it.source === 'project' || it.source === 'task') && it.blockId) toggleBlockDone(it.blockId); else { const h = habits.find((x) => x.id === it.habitId); if (h) onTap(h) } }} aria-label="Toggle">
                     <CheckCircle checked={done} color={it.color} size={26} />
                   </button>
                 )}
               </div>
             )
           })}
-            {stream.some((it) => it.source === 'habit') && (
+            {stream.some((it) => it.source !== 'google') && (
               <div className="pt-2 px-1">
                 {googleConnected
                   ? <button className="btn btn-sm w-full" onClick={saveDayToCalendar} disabled={savingCal || unsavedHabitItems.length === 0}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : unsavedHabitItems.length ? `Save in calendar (${unsavedHabitItems.length})` : 'Saved in calendar ✓'}</button>

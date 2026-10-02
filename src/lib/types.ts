@@ -75,14 +75,57 @@ export interface ListItem {
   sort_order: number
 }
 
+export type Difficulty = 'easy' | 'medium' | 'hard'
+
+/** School / work project whose estimated hours are scheduled as study sessions in the Planner. */
+export interface Project {
+  id: string
+  user_id: string | null
+  title: string
+  /** Course or module name (optional). */
+  course: string
+  due_date: string | null // YYYY-MM-DD
+  difficulty: Difficulty
+  /** Total hours the project needs. Defaults from difficulty; editable. */
+  hours_est: number
+  /** Length of one study session in minutes. */
+  session_min: number
+  color: string
+  done: boolean
+  notes: string
+  sort_order: number
+  created_at: string
+}
+
+/** One-time to-do: checked off once, optionally due on a date and placed in the Planner. */
+export interface Task {
+  id: string
+  user_id: string | null
+  title: string
+  due_date: string | null // YYYY-MM-DD
+  /** Time to book when the task is placed in the Planner. */
+  duration_min: number
+  done: boolean
+  done_at: string | null // ISO
+  /** Set on tasks the app creates itself (e.g. 'meal-prep:2026-10-05') so they are not duplicated. */
+  ref: string | null
+  sort_order: number
+  created_at: string
+}
+
+/** A planned block: a habit session (habit_id), a project study session (project_id) or a task (task_id). */
 export interface ScheduledBlock {
   id: string
   user_id: string | null
-  habit_id: string
+  habit_id: string | null
+  project_id?: string | null
+  task_id?: string | null
   date: string
   start_time: string // HH:mm
   duration_min: number
   google_event_id: string | null
+  /** Project sessions are ticked off directly (habits use habit_logs). */
+  done?: boolean
 }
 
 export interface CalendarEvent {
@@ -158,6 +201,15 @@ export interface MealPlan {
   day: number | null
   servings: number
   cooked: boolean
+}
+
+/** Hours the planner must not fill automatically. A habit's own ideal time (e.g. gym at 12:00) is still allowed. */
+export interface WorkHours {
+  enabled: boolean
+  /** 0 = Monday … 6 = Sunday */
+  days: number[]
+  start: string // HH:mm
+  end: string // HH:mm
 }
 
 export type Tab = 'today' | 'calendar' | 'lists' | 'planner' | 'settings'

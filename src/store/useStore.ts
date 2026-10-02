@@ -2,8 +2,10 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
-  CalendarEvent, Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Recipe, Reflection, ScheduledBlock, Tab, Theme,
+  CalendarEvent, Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Project, Recipe, Reflection, ScheduledBlock, Tab, Task, Theme, WorkHours,
 } from '../lib/types'
+import { blockLook } from '../lib/projects'
+import { DEFAULT_TASK_MIN } from '../lib/tasks'
 import { uid } from '../lib/id'
 import { db, type CloudData } from '../lib/db'
 import { supabase } from '../lib/supabase'
@@ -23,7 +25,7 @@ export interface User {
 
 interface DataState extends CloudData {}
 
-export type ListsMode = 'goals' | 'lists' | 'meals'
+export type ListsMode = 'goals' | 'lists' | 'meals' | 'projects'
 
 interface UIState {
   user: User | null
@@ -31,6 +33,8 @@ interface UIState {
   theme: Theme
   tab: Tab
   listsMode: ListsMode
+  /** Planner auto-placement keeps out of these hours (stored on this device). */
+  workHours: WorkHours
   /** Krónan API access token; cached locally and saved to the user's account when signed in. */
   kronanToken: string | null
   /** Why the token could not be synced to the account (null when fine or in local-only mode). */
@@ -46,6 +50,7 @@ interface UIState {
 interface Actions {
   setTab: (t: Tab) => void
   setTheme: (t: Theme) => void
+  setWorkHours: (patch: Partial<WorkHours>) => void
   showToast: (msg: string) => void
   setUser: (u: User | null) => void
   loadCloud: () => Promise<void>
@@ -80,6 +85,24 @@ interface Actions {
   deleteListItem: (id: string) => void
   reorderListItems: (list_id: string, ids: string[]) => void
   clearCompleted: (list_id: string) => void
+
+  // projects
+  addProject: (p: Omit<Project, 'id' | 'user_id' | 'created_at' | 'sort_order'>) => string
+  updateProject: (id: string, patch: Partial<Project>) => void
+  /** Removes the project and all of its study sessions (and their calendar events). */
+  deleteProject: (id: string) => void
+  scheduleProjectBlock: (project_id: string, date: string, start_time: string, duration_min: number) => ScheduledBlock
+  /** Tick a project study session or a planned task off (or back on). */
+  toggleBlockDone: (id: string) => void
+
+  // one-time tasks
+  addTask: (title: string, due_date?: string | null, opts?: { duration_min?: number; ref?: string | null }) => string
+  updateTask: (id: string, patch: Partial<Task>) => void
+  toggleTask: (id: string) => void
+  /** Removes the task and its planned block (and calendar event). */
+  deleteTask: (id: string) => void
+  /** Puts the task in the Planner. A task has at most one block, so an existing one is moved. */
+  scheduleTaskBlock: (task_id: string, date: string, start_time: string) => void
 
   // planner
   scheduleBlock: (habit_id: string, date: string, start_time: string, duration_min?: number) => ScheduledBlock
@@ -116,8 +139,10 @@ const now = () => new Date().toISOString()
 
 const emptyData: CloudData = {
   habits: [], logs: [], reflections: [], goals: [], goalTasks: [], lists: [], listItems: [], blocks: [],
-  recipes: [], mealPlans: [],
+  recipes: [], mealPlans: [], projects: [], tasks: [],
 }
+
+export const DEFAULT_WORK_HOURS: WorkHours = { enabled: true, days: [0, 1, 2, 3, 4], start: '08:00', end: '16:00' }
 
 const applyTheme = (t: Theme) => {
   document.documentElement.classList.toggle('dark', t === 'dark')
@@ -144,6 +169,7 @@ export const useStore = create<Store>()(
         theme: initialTheme(),
         tab: 'today',
         listsMode: 'goals',
+        workHours: DEFAULT_WORK_HOURS,
         kronanToken: null,
         kronanSyncError: null,
         googleConnected: false,
@@ -155,6 +181,7 @@ export const useStore = create<Store>()(
 
         setTab: (tab) => set({ tab }),
         setTheme: (theme) => { applyTheme(theme); set({ theme }) },
+        setWorkHours: (patch) => set({ workHours: { ...get().workHours, ...patch } }),
         showToast: (toast) => {
           set({ toast })
           setTimeout(() => { if (get().toast === toast) set({ toast: null }) }, 2200)
@@ -173,7 +200,7 @@ export const useStore = create<Store>()(
           if (saved.token) set({ kronanToken: saved.token })
           else if (!saved.error && local.kronanToken) void db.saveKronanToken(local.kronanToken).then((err) => set({ kronanSyncError: err }))
           const cloudEmpty = Object.values(cloud).every((arr) => arr.length === 0)
-          const localHasData = local.habits.length > 0 || local.lists.length > 0 || local.goals.length > 0
+          const localHasData = local.habits.length > 0 || local.lists.length > 0 || local.goals.length > 0 || local.tasks.length > 0
           if (cloudEmpty && localHasData) {
             // First sign-in on a device that already has local data: migrate it up.
             const u = uidOf()
@@ -182,7 +209,7 @@ export const useStore = create<Store>()(
               habits: stamp(local.habits), logs: stamp(local.logs), reflections: stamp(local.reflections),
               goals: stamp(local.goals), goalTasks: stamp(local.goalTasks), lists: stamp(local.lists),
               listItems: stamp(local.listItems), blocks: stamp(local.blocks),
-              recipes: stamp(local.recipes), mealPlans: stamp(local.mealPlans),
+              recipes: stamp(local.recipes), mealPlans: stamp(local.mealPlans), projects: stamp(local.projects), tasks: stamp(local.tasks),
             }
             set({ ...migrated })
             await db.pushAll(migrated)
@@ -342,12 +369,114 @@ export const useStore = create<Store>()(
           db.remove('list_items', gone)
         },
 
+        // ---------------- projects ----------------
+        addProject: (p) => {
+          const project: Project = { ...p, id: uid(), user_id: uidOf(), created_at: now(), sort_order: get().projects.length }
+          set({ projects: [...get().projects, project] })
+          db.upsert('projects', project)
+          return project.id
+        },
+        updateProject: (id, patch) => {
+          const projects = get().projects.map((p) => (p.id === id ? { ...p, ...patch } : p))
+          set({ projects })
+          const row = projects.find((p) => p.id === id)
+          if (row) {
+            db.upsert('projects', row)
+            // Title/colour changes should reach the mirrored calendar events too.
+            if (get().googleConnected && (patch.title !== undefined)) {
+              for (const b of get().blocks) if (b.project_id === id) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
+            }
+          }
+        },
+        deleteProject: (id) => {
+          const gone = get().blocks.filter((b) => b.project_id === id)
+          set({ projects: get().projects.filter((p) => p.id !== id), blocks: get().blocks.filter((b) => b.project_id !== id) })
+          db.remove('projects', id) // cascades to scheduled_blocks in Postgres
+          if (get().googleConnected) for (const b of gone) if (b.google_event_id) void google.deleteBlockEvent(b.google_event_id).catch((e) => console.warn(e))
+        },
+        scheduleProjectBlock: (project_id, date, start_time, duration_min) => {
+          const b: ScheduledBlock = {
+            id: uid(), user_id: uidOf(), habit_id: null, project_id, date, start_time, duration_min, google_event_id: null, done: false,
+          }
+          set({ blocks: [...get().blocks, b] })
+          db.upsert('scheduled_blocks', b)
+          if (get().googleConnected) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
+          return b
+        },
+        toggleBlockDone: (id) => {
+          const cur = get().blocks.find((b) => b.id === id)
+          if (cur?.task_id) { get().toggleTask(cur.task_id); return }
+          const blocks = get().blocks.map((b) => (b.id === id ? { ...b, done: !b.done } : b))
+          set({ blocks })
+          const row = blocks.find((b) => b.id === id)
+          if (row) db.upsert('scheduled_blocks', row)
+        },
+
+        // ---------------- tasks ----------------
+        addTask: (title, due_date = null, opts = {}) => {
+          const t: Task = {
+            id: uid(), user_id: uidOf(), title, due_date, duration_min: opts.duration_min ?? DEFAULT_TASK_MIN,
+            done: false, done_at: null, ref: opts.ref ?? null, sort_order: get().tasks.length, created_at: now(),
+          }
+          set({ tasks: [...get().tasks, t] })
+          db.upsert('tasks', t)
+          return t.id
+        },
+        updateTask: (id, patch) => {
+          const tasks = get().tasks.map((t) => (t.id === id ? { ...t, ...patch } : t))
+          set({ tasks })
+          const row = tasks.find((t) => t.id === id)
+          if (!row) return
+          db.upsert('tasks', row)
+          const b = get().blocks.find((x) => x.task_id === id)
+          if (b && patch.duration_min !== undefined && patch.duration_min !== b.duration_min) {
+            const blocks = get().blocks.map((x) => (x.id === b.id ? { ...x, duration_min: patch.duration_min! } : x))
+            set({ blocks })
+            db.upsert('scheduled_blocks', blocks.find((x) => x.id === b.id)!)
+          }
+          const nb = get().blocks.find((x) => x.task_id === id)
+          if (nb && get().googleConnected && (patch.title !== undefined || patch.duration_min !== undefined)) {
+            void get().syncBlockToGoogle(nb).catch(() => { /* surfaced via googleError */ })
+          }
+        },
+        toggleTask: (id) => {
+          const cur = get().tasks.find((t) => t.id === id)
+          if (!cur) return
+          const done = !cur.done
+          const tasks = get().tasks.map((t) => (t.id === id ? { ...t, done, done_at: done ? now() : null } : t))
+          // A planned block mirrors its task so the Planner shows it struck through.
+          const blocks = get().blocks.map((b) => (b.task_id === id ? { ...b, done } : b))
+          set({ tasks, blocks })
+          db.upsert('tasks', tasks.find((t) => t.id === id)!)
+          const b = blocks.find((x) => x.task_id === id)
+          if (b) db.upsert('scheduled_blocks', b)
+        },
+        deleteTask: (id) => {
+          const gone = get().blocks.filter((b) => b.task_id === id)
+          set({ tasks: get().tasks.filter((t) => t.id !== id), blocks: get().blocks.filter((b) => b.task_id !== id) })
+          db.remove('tasks', id) // cascades to scheduled_blocks in Postgres
+          if (get().googleConnected) for (const b of gone) if (b.google_event_id) void google.deleteBlockEvent(b.google_event_id).catch((e) => console.warn(e))
+        },
+        scheduleTaskBlock: (task_id, date, start_time) => {
+          const task = get().tasks.find((t) => t.id === task_id)
+          if (!task) return
+          const existing = get().blocks.find((b) => b.task_id === task_id)
+          if (existing) { get().moveBlock(existing.id, date, start_time); return }
+          const b: ScheduledBlock = {
+            id: uid(), user_id: uidOf(), habit_id: null, project_id: null, task_id, date, start_time,
+            duration_min: task.duration_min, google_event_id: null, done: task.done,
+          }
+          set({ blocks: [...get().blocks, b] })
+          db.upsert('scheduled_blocks', b)
+          if (get().googleConnected) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
+        },
+
         // ---------------- planner ----------------
         scheduleBlock: (habit_id, date, start_time, duration_min) => {
           const habit = get().habits.find((h) => h.id === habit_id)
           const b: ScheduledBlock = {
-            id: uid(), user_id: uidOf(), habit_id, date, start_time,
-            duration_min: duration_min ?? habit?.duration_min ?? 30, google_event_id: null,
+            id: uid(), user_id: uidOf(), habit_id, project_id: null, date, start_time,
+            duration_min: duration_min ?? habit?.duration_min ?? 30, google_event_id: null, done: false,
           }
           set({ blocks: [...get().blocks, b] })
           db.upsert('scheduled_blocks', b)
@@ -467,6 +596,9 @@ export const useStore = create<Store>()(
           const sunday = ymd(addDays(new Date(week_start + 'T00:00:00'), 6))
           const already = get().blocks.some((b) => b.habit_id === habit!.id && b.date === sunday)
           if (!already) get().scheduleBlock(habit.id, sunday, time, habit.duration_min)
+          // One "Shop for meal prep" to-do per prep week, due on prep day. Re-confirming never duplicates it.
+          const ref = `meal-prep:${week_start}`
+          if (!get().tasks.some((t) => t.ref === ref)) get().addTask('Shop for meal prep', sunday, { duration_min: 60, ref })
         },
 
         // ---------------- google ----------------
@@ -492,10 +624,10 @@ export const useStore = create<Store>()(
           }
         },
         syncBlockToGoogle: async (block) => {
-          const habit = get().habits.find((h) => h.id === block.habit_id)
-          if (!habit) return
+          const look = blockLook(block, get().habits, get().projects, get().tasks)
+          if (!look) return
           try {
-            const eventId = await google.upsertBlockEvent(block, habit)
+            const eventId = await google.upsertBlockEvent(block, look)
             if (eventId !== block.google_event_id) {
               const blocks = get().blocks.map((b) => (b.id === block.id ? { ...b, google_event_id: eventId } : b))
               set({ blocks })
@@ -528,8 +660,8 @@ export const useStore = create<Store>()(
       version: 1,
       partialize: (s) => ({
         habits: s.habits, logs: s.logs, reflections: s.reflections, goals: s.goals, goalTasks: s.goalTasks,
-        lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans,
-        theme: s.theme, tab: s.tab, listsMode: s.listsMode, kronanToken: s.kronanToken,
+        lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
+        theme: s.theme, tab: s.tab, listsMode: s.listsMode, kronanToken: s.kronanToken, workHours: s.workHours,
         googleConnected: s.googleConnected,
       }),
       onRehydrateStorage: () => (state) => { if (state) applyTheme(state.theme) },

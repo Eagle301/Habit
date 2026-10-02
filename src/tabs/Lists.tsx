@@ -9,15 +9,16 @@ import { format } from '../lib/dates'
 import { Card, CheckCircle, Empty, Header, Segment } from '../components/ui/Bits'
 import { Sheet } from '../components/ui/Sheet'
 import { Meals } from './Meals'
+import { Projects } from './Projects'
 
 export function Lists() {
   const mode = useStore((s) => s.listsMode)
   const setMode = useStore((s) => s.setListsMode)
   return (
     <div>
-      <Header subtitle="Goals, lists & meals" title="Lists" />
-      <Segment<ListsMode> value={mode} options={[{ value: 'goals', label: '🎯 Goals' }, { value: 'lists', label: '📝 Lists' }, { value: 'meals', label: '🍲 Meals' }]} onChange={setMode} />
-      <div className="mt-4">{mode === 'goals' ? <Goals /> : mode === 'lists' ? <GeneralLists /> : <Meals />}</div>
+      <Header subtitle="Goals, lists, meals & projects" title="Lists" />
+      <Segment<ListsMode> value={mode} options={[{ value: 'goals', label: '🎯 Goals' }, { value: 'lists', label: '📝 Lists' }, { value: 'meals', label: '🍲 Meals' }, { value: 'projects', label: '🎓 Projects' }]} onChange={setMode} />
+      <div className="mt-4">{mode === 'goals' ? <Goals /> : mode === 'lists' ? <GeneralLists /> : mode === 'meals' ? <Meals /> : <Projects />}</div>
     </div>
   )
 }
