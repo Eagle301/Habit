@@ -30,11 +30,15 @@ export default function App() {
         avatar: meta.avatar_url || meta.picture || null,
         providers: (session.user.app_metadata?.providers as string[] | undefined) ?? [],
       })
-      seedProviderToken(session.provider_token)
-      // Right after a Google OAuth round-trip Supabase exposes the Google tokens exactly once: persist them
+      // Right after a Google OAuth round-trip (SIGNED_IN) Supabase exposes the Google tokens: persist them
       // server-side. The refresh token only arrives when Google re-consents (prompt=consent), so a
       // missing one keeps whatever is already stored.
-      if (session.provider_token || session.provider_refresh_token) {
+      // Supabase keeps provider_token in the persisted session, so on a later reload (INITIAL_SESSION)
+      // it is still present but long expired. Saving it again would overwrite the server's valid cached
+      // token with a dead one and force a "reconnect", so only fresh sign-ins count.
+      const freshOAuth = event === 'SIGNED_IN' && !!(session.provider_token || session.provider_refresh_token)
+      if (freshOAuth) {
+        seedProviderToken(session.provider_token)
         const { error } = await sb.rpc('save_google_token', {
           p_refresh: session.provider_refresh_token ?? null,
           p_access: session.provider_token ?? null,

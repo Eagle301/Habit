@@ -33,6 +33,8 @@ interface UIState {
   listsMode: ListsMode
   /** Krónan API access token; cached locally and saved to the user's account when signed in. */
   kronanToken: string | null
+  /** Why the token could not be synced to the account (null when fine or in local-only mode). */
+  kronanSyncError: string | null
   googleConnected: boolean
   googleError: string | null
   events: CalendarEvent[]
@@ -143,6 +145,7 @@ export const useStore = create<Store>()(
         tab: 'today',
         listsMode: 'goals',
         kronanToken: null,
+        kronanSyncError: null,
         googleConnected: false,
         googleError: null,
         events: [],
@@ -165,9 +168,10 @@ export const useStore = create<Store>()(
           if (!cloud) return
           const local = get()
           // Krónan token: the account copy wins; a token entered before signing in is pushed up.
-          const savedToken = await db.loadKronanToken()
-          if (savedToken) set({ kronanToken: savedToken })
-          else if (local.kronanToken) void db.saveKronanToken(local.kronanToken)
+          const saved = await db.loadKronanToken()
+          set({ kronanSyncError: saved.error })
+          if (saved.token) set({ kronanToken: saved.token })
+          else if (!saved.error && local.kronanToken) void db.saveKronanToken(local.kronanToken).then((err) => set({ kronanSyncError: err }))
           const cloudEmpty = Object.values(cloud).every((arr) => arr.length === 0)
           const localHasData = local.habits.length > 0 || local.lists.length > 0 || local.goals.length > 0
           if (cloudEmpty && localHasData) {
@@ -191,7 +195,7 @@ export const useStore = create<Store>()(
         signOut: async () => {
           await supabase?.auth.signOut()
           google.clearGoogleCache()
-          set({ ...emptyData, user: null, googleConnected: false, events: [], eventsRange: null, kronanToken: null })
+          set({ ...emptyData, user: null, googleConnected: false, events: [], eventsRange: null, kronanToken: null, kronanSyncError: null })
         },
 
         // ---------------- habits ----------------
@@ -384,7 +388,7 @@ export const useStore = create<Store>()(
         setListsMode: (listsMode) => set({ listsMode }),
         setKronanToken: (kronanToken) => {
           set({ kronanToken })
-          if (get().user) void db.saveKronanToken(kronanToken)
+          if (get().user) void db.saveKronanToken(kronanToken).then((err) => set({ kronanSyncError: err }))
         },
         addRecipe: (r) => {
           const recipe: Recipe = { ...r, id: uid(), user_id: uidOf(), created_at: now() }

@@ -113,8 +113,8 @@ export function Meals() {
         )}
 
         <div className="flex flex-wrap justify-center gap-2 mt-3">
-          <button className="btn btn-sm btn-primary" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule Sunday prep</button>
-          {kronanToken && <button className="btn btn-sm" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send week to Krónan'}</button>}
+          <button className="btn btn-sm btn-primary" onClick={() => setPrepOpen(true)} disabled={!recipes.length}><CalendarDays size={14} /> Schedule prep</button>
+          {kronanToken && <button className="btn btn-sm" onClick={pushToKronan} disabled={!plans.length || pushing}><Wand2 size={14} /> {pushing ? 'Sending…' : 'Send to Krónan'}</button>}
         </div>
         {!kronanToken && <p className="text-3 text-[11px] mt-2">Connect Krónan in <button className="underline" onClick={() => setTab('settings')}>Settings</button> to browse their recipes with live prices and macros, and push shopping lists to your account.</p>}
       </Card>
@@ -737,7 +737,7 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
 
   return (
     <div className="flex flex-col gap-3">
-      <input className="field font-semibold" placeholder="Recipe name" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus={!initial} />
+      <input className="field font-semibold" placeholder="Recipe name" value={title} onChange={(e) => setTitle(e.target.value)} />
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs text-3">Servings<input className="field mt-1" type="number" min={1} value={servings} onChange={(e) => setServings(Number(e.target.value) || 1)} /></label>
         <label className="text-xs text-3">Link (optional)<input className="field mt-1" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} /></label>
@@ -845,7 +845,7 @@ function StorePicker({ onDone, onBack }: { onDone: (picked: RecipeIngredient[]) 
     } catch (e) { setError(e instanceof Error ? e.message : 'Search failed') } finally { setBusy(false) }
   }
 
-  useEffect(() => { void run('', 1, true); inputRef.current?.focus() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void run('', 1, true) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = sentinel.current
     if (!el) return

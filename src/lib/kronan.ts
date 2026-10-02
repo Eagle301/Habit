@@ -30,7 +30,9 @@ async function kfetch<T>(token: string, path: string, init: RequestInit = {}): P
   if (!res.ok) {
     const detail = (json as { detail?: string } | null)?.detail
     throw new KronanError(
-      res.status === 401 ? 'Krónan rejected the access token' : detail || `Krónan API error ${res.status}`,
+      res.status === 401
+        ? 'Krónan rejected the access token. Tokens expire, so create a new one on kronan.is and replace it in Settings.'
+        : detail || `Krónan API error ${res.status}`,
       res.status,
     )
   }

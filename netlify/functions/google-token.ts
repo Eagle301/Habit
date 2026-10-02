@@ -43,8 +43,10 @@ export const handler: Handler = async (event) => {
 
   if (!row) return json(404, { error: 'Google Calendar is not connected', reconnect: true })
 
-  // Reuse a cached access token if it has more than 2 minutes left.
-  if (row.access_token && row.expires_at && new Date(row.expires_at).getTime() - Date.now() > 120_000) {
+  // Reuse a cached access token if it has more than 2 minutes left, unless the client says Google
+  // just rejected it (?force=1).
+  const force = event.queryStringParameters?.force === '1'
+  if (!force && row.access_token && row.expires_at && new Date(row.expires_at).getTime() - Date.now() > 120_000) {
     return json(200, { access_token: row.access_token, expires_at: row.expires_at })
   }
   if (!row.refresh_token) {

@@ -22,6 +22,11 @@ const report = (op: string, table: string) => (res: { error: unknown }) => {
   if (res.error) console.error(`[db] ${op} ${table} failed`, res.error)
 }
 
+const kronanSyncMessage = (error: { code?: string; message?: string }) =>
+  error.code === 'PGRST205'
+    ? 'Krónan token is not synced to your account: the kronan_tokens table is missing. Run supabase/migrations/0005_kronan_tokens.sql in the Supabase SQL editor.'
+    : `Krónan token sync failed: ${error.message ?? 'unknown error'}`
+
 /** Fire-and-forget writes; the local store is the source of truth for the UI. */
 export const db = {
   upsert<T extends object>(table: Table, rows: T | T[]) {
@@ -85,21 +90,23 @@ export const db = {
     await step('meal_plans', d.mealPlans)
   },
   /** Krónan access token for the signed-in user (null when none is stored or in local-only mode). */
-  async loadKronanToken(): Promise<string | null> {
-    if (!supabase) return null
+  /** `error` is set when the account copy could not be read (e.g. migration 0005 not applied). */
+  async loadKronanToken(): Promise<{ token: string | null; error: string | null }> {
+    if (!supabase) return { token: null, error: null }
     const { data, error } = await supabase.from('kronan_tokens').select('token').maybeSingle()
-    if (error) { console.error('[db] loadKronanToken failed', error); return null }
-    return data?.token ?? null
+    if (error) { console.error('[db] loadKronanToken failed', error); return { token: null, error: kronanSyncMessage(error) } }
+    return { token: data?.token ?? null, error: null }
   },
-  async saveKronanToken(token: string | null) {
-    if (!supabase) return
+  async saveKronanToken(token: string | null): Promise<string | null> {
+    if (!supabase) return null
     const { data } = await supabase.auth.getUser()
     const uid = data.user?.id
-    if (!uid) return
+    if (!uid) return null
     const res = token
       ? await supabase.from('kronan_tokens').upsert({ user_id: uid, token, updated_at: new Date().toISOString() })
       : await supabase.from('kronan_tokens').delete().eq('user_id', uid)
-    if (res.error) console.error('[db] saveKronanToken failed', res.error)
+    if (res.error) { console.error('[db] saveKronanToken failed', res.error); return kronanSyncMessage(res.error) }
+    return null
   },
   async wipeAll() {
     if (!supabase) return

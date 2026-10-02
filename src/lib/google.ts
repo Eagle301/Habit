@@ -20,26 +20,41 @@ export const seedProviderToken = (token: string | null | undefined) => {
 
 export const clearGoogleCache = () => { cached = null }
 
-export async function getAccessToken(): Promise<string> {
-  if (cached && cached.exp - Date.now() > 60_000) return cached.token
+/**
+ * Get a Google access token. `force` skips every cache (ours and the server's) and goes straight to
+ * the refresh token — used after Google answered 401 to a token we believed was still valid.
+ */
+export async function getAccessToken(force = false): Promise<string> {
+  if (!force && cached && cached.exp - Date.now() > 60_000) return cached.token
   if (!supabase) throw new GoogleAuthError('Sign in with Supabase to use Google Calendar')
   const { data } = await supabase.auth.getSession()
   const jwt = data.session?.access_token
   if (!jwt) throw new GoogleAuthError('Not signed in')
-  const res = await fetch('/api/google-token', { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } })
+  const res = await fetch(`/api/google-token${force ? '?force=1' : ''}`, { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } })
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('json')) {
+    // `npm run dev` has no Netlify functions: the SPA fallback returned index.html.
+    throw new GoogleAuthError('Google token endpoint unavailable. Run `netlify dev`, or set DEV_API_ORIGIN in .env to your deployed site so Vite can proxy it.')
+  }
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_at?: string; error?: string }
   if (!res.ok || !body.access_token) throw new GoogleAuthError(body.error || 'Could not get Google token')
   cached = { token: body.access_token, exp: body.expires_at ? new Date(body.expires_at).getTime() : Date.now() + 3600_000 }
   return cached.token
 }
 
-async function gfetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = await getAccessToken()
+async function gfetch<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const token = await getAccessToken(retried)
   const res = await fetch(`${API}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
   })
-  if (res.status === 401) { cached = null; throw new GoogleAuthError('Google session expired') }
+  if (res.status === 401) {
+    cached = null
+    // A stale cached access token (ours or the server's) is the common cause; refresh once before
+    // declaring the connection dead.
+    if (!retried) return gfetch<T>(path, init, true)
+    throw new GoogleAuthError('Google session expired')
+  }
   if (res.status === 204) return undefined as T
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error?.message || `Google API error ${res.status}`)
@@ -55,7 +70,17 @@ interface GEvent {
   extendedProperties?: { private?: Record<string, string> }
 }
 
-export async function listEvents(timeMin: Date, timeMax: Date): Promise<CalendarEvent[]> {
+interface GCalendar { id: string; summary?: string; summaryOverride?: string; backgroundColor?: string; selected?: boolean; primary?: boolean; deleted?: boolean }
+
+/** Calendars the user has ticked in Google Calendar, incl. subscribed ones such as a work ICS feed. */
+export async function listCalendars(): Promise<GCalendar[]> {
+  const data = await gfetch<{ items?: GCalendar[] }>('/users/me/calendarList?minAccessRole=freeBusyReader&showHidden=false')
+  // Primary is always included (even if unticked) so our own habit blocks are recognised.
+  const cals = (data.items ?? []).filter((c) => !c.deleted && (c.selected || c.primary))
+  return cals.length ? cals : [{ id: 'primary', primary: true }]
+}
+
+async function listCalendarEvents(cal: GCalendar, timeMin: Date, timeMax: Date): Promise<CalendarEvent[]> {
   const q = new URLSearchParams({
     timeMin: timeMin.toISOString(),
     timeMax: timeMax.toISOString(),
@@ -63,17 +88,33 @@ export async function listEvents(timeMin: Date, timeMax: Date): Promise<Calendar
     orderBy: 'startTime',
     maxResults: '250',
   })
-  const data = await gfetch<{ items?: GEvent[] }>(`/calendars/primary/events?${q}`)
+  const data = await gfetch<{ items?: GEvent[] }>(`/calendars/${encodeURIComponent(cal.id)}/events?${q}`)
+  const name = cal.primary ? 'Google Calendar' : cal.summaryOverride || cal.summary || 'Calendar'
   return (data.items ?? [])
     .filter((e) => e.status !== 'cancelled')
     .map((e) => ({
-      id: e.id,
+      id: cal.primary ? e.id : `${cal.id}:${e.id}`,
       title: e.summary || '(No title)',
       start: e.start.dateTime || `${e.start.date}T00:00:00`,
       end: e.end.dateTime || `${e.end.date}T00:00:00`,
       allDay: !e.start.dateTime,
+      calendar: name,
+      color: cal.primary ? undefined : cal.backgroundColor,
       habitBlockId: e.extendedProperties?.private?.app === APP_TAG ? e.extendedProperties.private.blockId : undefined,
     }))
+}
+
+/** Events from every selected calendar, merged and sorted. A calendar that fails to load is skipped. */
+export async function listEvents(timeMin: Date, timeMax: Date): Promise<CalendarEvent[]> {
+  const cals = await listCalendars()
+  const results = await Promise.allSettled(cals.map((c) => listCalendarEvents(c, timeMin, timeMax)))
+  const out: CalendarEvent[] = []
+  for (const r of results) {
+    if (r.status === 'fulfilled') out.push(...r.value)
+    else if (r.reason instanceof GoogleAuthError) throw r.reason
+    else console.warn('Calendar failed to load', r.reason)
+  }
+  return out.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 }
 
 const blockBody = (block: ScheduledBlock, habit: Habit) => {

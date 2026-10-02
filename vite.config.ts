@@ -1,9 +1,13 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+// `npm run dev` runs no Netlify functions. If DEV_API_ORIGIN (e.g. https://my-site.netlify.app) is set
+// in .env, /api/google-token is proxied to the deployed function so Google Calendar works locally.
+const devApiOrigin = loadEnv(mode, process.cwd(), '').DEV_API_ORIGIN?.replace(/\/$/, '')
+return {
   define: { __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.1.0') },
   plugins: [
     react(),
@@ -49,6 +53,7 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/kronan\/?/, '/api/v1/'),
       },
+      ...(devApiOrigin ? { '/api/google-token': { target: devApiOrigin, changeOrigin: true } } : {}),
     },
   },
   build: {
@@ -67,4 +72,5 @@ export default defineConfig({
       },
     },
   },
+}
 })

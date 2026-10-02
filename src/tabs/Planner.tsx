@@ -56,11 +56,15 @@ export function Planner() {
   const eventsByDay = useMemo(() => {
     const m = new Map<string, CalendarEvent[]>()
     const blockIds = new Set(blocks.map((b) => b.id))
+    const push = (k: string, e: CalendarEvent) => { if (!m.has(k)) m.set(k, []); m.get(k)!.push(e) }
     for (const e of events) {
       if (e.habitBlockId && blockIds.has(e.habitBlockId)) continue
-      const k = format(new Date(e.start), 'yyyy-MM-dd')
-      if (!m.has(k)) m.set(k, [])
-      m.get(k)!.push(e)
+      if (e.allDay) {
+        // All-day events span [start, end) — Google's end date is exclusive. Show on every day covered.
+        const end = new Date(e.end)
+        for (let d = new Date(e.start); d < end; d = addDays(d, 1)) push(ymd(d), e)
+        if (new Date(e.start) >= end) push(ymd(new Date(e.start)), e)
+      } else push(format(new Date(e.start), 'yyyy-MM-dd'), e)
     }
     return m
   }, [events, blocks])
@@ -160,6 +164,7 @@ export function Planner() {
 
   const selBlocks = blocks.filter((b) => b.date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time))
   const selEvents = (eventsByDay.get(selectedDay) ?? []).filter((e) => !e.allDay)
+  const selAllDay = (eventsByDay.get(selectedDay) ?? []).filter((e) => e.allDay)
 
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
@@ -215,6 +220,16 @@ export function Planner() {
 
         <SectionTitle>{format(new Date(selectedDay + 'T00:00:00'), 'EEEE, MMM d')}</SectionTitle>
         <Card className="p-2">
+          {selAllDay.length > 0 && (
+            <div className="flex gap-2 border-b hairline pb-1 mb-1">
+              <div className="w-12 shrink-0 text-[11px] text-3 pt-2 text-right pr-1">All day</div>
+              <div className="grow flex flex-col gap-1 py-1 min-w-0">
+                {selAllDay.map((e) => (
+                  <div key={e.id} className="text-xs rounded-lg px-2 py-1 truncate" title={e.calendar} style={{ background: `${e.color ?? '#4285F4'}2e`, borderLeft: `3px solid ${e.color ?? '#4285F4'}` }}>{e.title}</div>
+                ))}
+              </div>
+            </div>
+          )}
           {HOURS.map((h) => (
             <HourRow key={h} date={selectedDay} hour={h}
               blocks={selBlocks.filter((b) => Math.floor(timeToMinutes(b.start_time) / 60) === h)}
@@ -296,7 +311,7 @@ function HourRow({ date, hour, blocks, events, habits, onDelete }: { date: strin
       <div className="w-12 shrink-0 text-[11px] text-3 pt-2 text-right pr-1">{String(hour).padStart(2, '0')}:00</div>
       <div className="grow flex flex-col gap-1 py-1 min-w-0">
         {events.map((e) => (
-          <div key={e.id} className="text-xs rounded-lg px-2 py-1 truncate" style={{ background: 'rgba(66,133,244,0.18)', borderLeft: '3px solid #4285F4' }}>
+          <div key={e.id} className="text-xs rounded-lg px-2 py-1 truncate" title={e.calendar} style={{ background: `${e.color ?? '#4285F4'}2e`, borderLeft: `3px solid ${e.color ?? '#4285F4'}` }}>
             {format(new Date(e.start), 'HH:mm')} {e.title}
           </div>
         ))}

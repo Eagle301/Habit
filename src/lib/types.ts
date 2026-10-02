@@ -91,6 +91,10 @@ export interface CalendarEvent {
   start: string // ISO
   end: string // ISO
   allDay: boolean
+  /** Display name of the calendar the event came from (e.g. "Work"). */
+  calendar?: string
+  /** Calendar colour from Google (subscribed calendars only). */
+  color?: string
   /** Set when this Google event mirrors one of our scheduled blocks. */
   habitBlockId?: string
 }

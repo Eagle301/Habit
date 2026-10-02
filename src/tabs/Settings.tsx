@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DndContext, PointerSensor, TouchSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -21,6 +21,22 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
   const [kronanBusy, setKronanBusy] = useState(false)
   const [kronanName, setKronanName] = useState<string | null>(null)
   const [kronanErr, setKronanErr] = useState<string | null>(null)
+  /** Show the token field while connected, e.g. after Krónan expired the old token. */
+  const [kronanReplace, setKronanReplace] = useState(false)
+
+  // Verify the stored token when Settings opens so an expired one is flagged here, not mid meal-prep.
+  useEffect(() => {
+    const token = s.kronanToken
+    if (!token) return
+    let cancelled = false
+    kronan.me(token)
+      .then((who) => { if (!cancelled) setKronanName(who.name) })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        if (e instanceof kronan.KronanError && e.status === 401) { setKronanErr(e.message); setKronanReplace(true) }
+      })
+    return () => { cancelled = true }
+  }, [s.kronanToken])
 
   const connectKronan = async () => {
     const token = kronanInput.trim()
@@ -31,6 +47,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
       s.setKronanToken(token)
       setKronanName(who.name)
       setKronanInput('')
+      setKronanReplace(false)
       s.showToast('Krónan connected')
     } catch (e) {
       setKronanErr(e instanceof Error ? e.message : 'Could not verify token')
@@ -179,15 +196,18 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
           </div>
         </div>
         {kronanErr && <div className="text-xs mt-3 p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>{kronanErr}</div>}
-        {s.kronanToken ? (
+        {s.kronanSyncError && <div className="text-xs mt-3 p-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.14)', color: '#d97706' }}>{s.kronanSyncError}</div>}
+        {s.kronanToken && !kronanReplace ? (
           <div className="flex gap-2 mt-3">
+            <button className="btn btn-sm" onClick={() => setKronanReplace(true)}>Replace token</button>
             <button className="btn btn-sm btn-danger" onClick={() => { s.setKronanToken(null); setKronanName(null); s.showToast('Krónan disconnected') }}>Disconnect</button>
           </div>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             <input className="field" type="password" placeholder="Paste your Krónan API access token" value={kronanInput} onChange={(e) => setKronanInput(e.target.value)} autoComplete="off" />
             <div className="flex items-center gap-2">
-              <button className="btn btn-primary btn-sm" onClick={connectKronan} disabled={!kronanInput.trim() || kronanBusy}>{kronanBusy ? 'Checking…' : 'Connect'}</button>
+              <button className="btn btn-primary btn-sm" onClick={connectKronan} disabled={!kronanInput.trim() || kronanBusy}>{kronanBusy ? 'Checking…' : s.kronanToken ? 'Save new token' : 'Connect'}</button>
+              {s.kronanToken && <button className="btn btn-sm" onClick={() => { setKronanReplace(false); setKronanInput('') }}>Cancel</button>}
               <a className="text-3 text-xs underline" href="https://kronan.is/kronan-public-api" target="_blank" rel="noreferrer">How to get a token</a>
             </div>
             <p className="text-3 text-[11px]">{kronan.KRONAN_TOKEN_HELP}. {s.user ? 'The token is saved to your account so it is there when you sign in again, and' : 'The token stays on this device and'} is only sent to Krónan through the app’s proxy.</p>

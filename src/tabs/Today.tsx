@@ -60,7 +60,7 @@ export function Today() {
 
   // Schedule stream: our blocks + Google events for the selected day, merged & sorted.
   const stream = useMemo(() => {
-    const items: { key: string; time: Date; end: Date; title: string; icon?: string; color?: string; source: 'habit' | 'google'; habitId?: string; allDay?: boolean }[] = []
+    const items: { key: string; time: Date; end: Date; title: string; icon?: string; color?: string; source: 'habit' | 'google'; habitId?: string; allDay?: boolean; calendar?: string }[] = []
     for (const b of dayBlocks) {
       const h = habits.find((x) => x.id === b.habit_id)
       if (!h) continue
@@ -77,8 +77,12 @@ export function Today() {
     for (const e of events) {
       if (e.habitBlockId && blockIds.has(e.habitBlockId)) continue
       const s = new Date(e.start)
-      if (format(s, 'yyyy-MM-dd') !== date) continue
-      items.push({ key: e.id, time: s, end: new Date(e.end), title: e.title, source: 'google', allDay: e.allDay })
+      if (e.allDay) {
+        // Multi-day all-day events cover [start, end) with an exclusive end date.
+        const sk = format(s, 'yyyy-MM-dd'), ek = format(new Date(e.end), 'yyyy-MM-dd')
+        if (date < sk || (date >= ek && date !== sk)) continue
+      } else if (format(s, 'yyyy-MM-dd') !== date) continue
+      items.push({ key: e.id, time: s, end: new Date(e.end), title: e.title, source: 'google', allDay: e.allDay, color: e.color, calendar: e.calendar })
     }
     return items.sort((a, b) => (a.allDay ? -1 : b.allDay ? 1 : a.time.getTime() - b.time.getTime()))
   }, [dayBlocks, events, habits, date]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -209,7 +213,7 @@ export function Today() {
                 <div className="w-1 self-stretch rounded-full" style={{ background: it.color ?? '#4285F4' }} />
                 <div className="grow min-w-0">
                   <div className={`font-medium truncate ${done ? 'line-through text-3' : ''}`}>{it.icon ? `${it.icon} ` : ''}{it.title}</div>
-                  <div className="text-3 text-xs">{it.source === 'google' ? 'Google Calendar' : dayBlocks.find((b) => b.id === it.key)?.google_event_id ? 'Habit · 📅 in calendar' : 'Habit'}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
+                  <div className="text-3 text-xs">{it.source === 'google' ? it.calendar ?? 'Google Calendar' : dayBlocks.find((b) => b.id === it.key)?.google_event_id ? 'Habit · 📅 in calendar' : 'Habit'}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
                 </div>
                 {it.habitId && (
                   <button onClick={() => { const h = habits.find((x) => x.id === it.habitId); if (h) onTap(h) }} aria-label="Toggle">

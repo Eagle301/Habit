@@ -57,7 +57,7 @@ export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boo
         style={{ background: on ? '#34c759' : 'var(--line)' }}
       >
         <span
-          className="absolute top-[3px] w-6 h-6 rounded-full bg-white shadow transition-transform duration-200"
+          className="absolute top-[3px] left-0 w-6 h-6 rounded-full bg-white shadow transition-transform duration-200"
           style={{ transform: on ? 'translateX(23px)' : 'translateX(3px)' }}
         />
       </span>
