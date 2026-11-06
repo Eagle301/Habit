@@ -1,14 +1,15 @@
 # Habits — Daily Tracker & Weekly Planner (PWA)
 
-Mobile-first habit tracker with daily reflection, monthly heatmap analytics, goals & lists,
-a drag-and-drop weekly planner, and 2-way Google Calendar sync. Built with Vite + React 19 +
+Mobile-first habit tracker with a monthly calendar you plan your days in, goals, weekly meal prep,
+and 2-way Google Calendar sync. Built with Vite + React 19 +
 TypeScript + Tailwind v4, backed by Supabase, deployed on Netlify.
 
 ```
 src/
   App.tsx                 auth gate, tab router, toast
   components/             BottomNav, AuthScreen, HabitEditor, ui/ (Sheet, ProgressRing, Bits)
-  tabs/                   Today, Calendar, Lists, Planner, Settings
+  tabs/                   Today, Calendar (incl. planning), Meals, Goals, Settings
+  lib/planning.ts         what is still unplanned, free-slot search, auto-fill a week
   store/useStore.ts       zustand store (localStorage persisted, synced to Supabase)
   lib/                    supabase client, db sync, google calendar client, analytics, dates
 netlify/functions/
@@ -40,6 +41,11 @@ npm run dev
    `http://localhost:5173` and your Netlify URL to Redirect URLs.
 5. Copy Project URL + anon key into `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.
 
+**Upgrading an existing project to the November 2026 version** (goals + projects merged, to-dos on
+the calendar, recipe photos, preferred habit days): run `supabase/apply_all_new_changes.sql` once in
+the SQL editor before deploying. It bundles migrations 0006, 0007 and 0009–0011, is safe to re-run,
+and deletes nothing.
+
 ## 3. Google Calendar (2-way)
 
 1. Google Cloud Console → create a project → enable **Google Calendar API**.
@@ -59,7 +65,7 @@ verifies the Supabase JWT, exchanges the refresh token for an access token and c
 calls the Calendar API directly:
 
 - **Pull**: events for the visible week (+5 weeks) are fetched and shown in Today's schedule stream and the
-  Planner timeline; busy intervals drive auto-fill.
+  Calendar tab's day view; busy intervals drive planning and auto-fill.
 - **Push**: every scheduled habit block is created/updated/deleted as an event on the primary calendar,
   tagged with `extendedProperties.private.app = habit-tracker` so re-imports don't duplicate it.
 
@@ -68,18 +74,18 @@ Supabase links the Google identity to the existing account when the e-mail match
 
 ## 3b. Krónan (meal prep)
 
-Lists → **Meals** holds a recipe library and a weekly meal plan with an estimated cost in ISK.
+The **Meals** tab holds a recipe library and a weekly meal plan with an estimated cost in ISK.
 Recipes can be written by hand (with a price per ingredient) or pulled from Krónan's recipe
 catalogue, where every ingredient is a real product with a live price. Each recipe shows two lists:
 **Need to buy** (packages, prices, total) and **Recipe** (amount actually used per ingredient with
 macros, plus totals per dish and per serving). Macros come from Krónan's product nutrition table
 (per 100 g) via `POST /products/batch/`; package sizes from `qtyPerBaseCompUnit` or the product name.
-"Make this" adds the recipe to the plan, pushes the need-to-buy list into Groceries and, when
-connected, creates a product list in the Krónan app. Actions on the weekly plan:
+The tab always shows the week being prepped (this week; from Sunday, the week ahead). "Plan & shop"
+adds a recipe to that week and, when connected, creates a product list in the Krónan app. The week card
+shows a **shopping list** merged from all planned recipes (scaled to servings, whole packages). Actions on the weekly plan:
 
-- **Ingredients → Groceries**: merges all ingredients (scaled to servings) into the "Groceries" list.
-- **Schedule Sunday prep**: creates a weekly "Meal prep" habit and a Sunday 14:00 block in the Planner
-  (and on Google Calendar when connected).
+- **Schedule prep**: creates a weekly "Meal prep" habit and a Sunday block on the calendar
+  (and on Google Calendar when connected), plus a "Shop for meal prep" to-do.
 - **Send to Krónan list**: creates a product list in your Krónan account with the linked products.
 
 Krónan's public API (`https://api.kronan.is/api/v1/`) needs a personal access token, created under
@@ -89,6 +95,11 @@ forwarded as `Authorization: AccessToken <token>`, cached in the browser (localS
 in, saved per user in the `kronan_tokens` table (RLS: owner only) so it is restored on the next sign-in
 or device. Run `supabase/migrations/0002_meals.sql` (recipes, meal plans) and
 `supabase/migrations/0005_kronan_tokens.sql`, or the combined `supabase/schema.sql`.
+
+**Recipe photos**: the photo area on a recipe opens the phone camera or photo library. Photos are
+shrunk on the device (max 1280 px JPEG) and, when signed in, uploaded to the `recipe-photos` Storage
+bucket under the user's own folder (run `supabase/migrations/0010_recipe_photos.sql`). In local-only mode,
+or before that migration runs, a smaller copy is stored inline in the recipe instead.
 
 ## 3c. Daily reminder (push notifications)
 
@@ -123,10 +134,13 @@ respects the safe areas, works offline for cached assets, and keeps data in loca
 |---|---|
 | `habits` | name, icon, color, frequency (`daily`/`weekly`/`monthly`), target_count, sub_habits[], default_time, duration |
 | `habit_logs` | one row per habit per day; `sub_habit` records which option was chosen |
-| `reflections` | 1–5 mood score + note per day |
-| `goals`, `goal_tasks` | long-term goals (optional target date), linked habit ids, action steps |
-| `lists`, `list_items` | general lists with ordering |
-| `scheduled_blocks` | planner time blocks; `google_event_id` links the mirrored calendar event |
+| `projects` | goals: optional due date, `steps` (jsonb checklist) and `hours_est` booked as one-hour sessions (0 = none) |
+| `tasks` | one-time to-dos, optionally due and planned on the calendar |
+| `scheduled_blocks` | planned time blocks (habit, goal session or to-do); `google_event_id` links the mirrored calendar event |
+| `recipes`, `meal_plans` | recipe library and the meals planned per week |
+
+`goals`, `goal_tasks`, `lists`, `list_items` and `reflections` are no longer used:
+`0009_simplify.sql` copies old goals into `projects` and archives "extra" trackers.
 | `google_tokens` | refresh token per user (server-only read) |
 
 All tables have RLS `auth.uid() = user_id`.

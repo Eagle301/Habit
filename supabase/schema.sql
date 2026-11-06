@@ -14,6 +14,7 @@ create table if not exists public.habits (
   target_count int not null default 1 check (target_count >= 1),
   sub_habits jsonb not null default '[]'::jsonb,
   default_time text,
+  preferred_days smallint[] not null default '{}',
   duration_min int not null default 30,
   sort_order int not null default 0,
   archived boolean not null default false,
@@ -256,6 +257,7 @@ create table if not exists public.projects (
   color text not null default '#0ea5e9',
   done boolean not null default false,
   notes text not null default '',
+  steps jsonb not null default '[]'::jsonb,
   sort_order int not null default 0,
   created_at timestamptz not null default now()
 );

@@ -10,13 +10,17 @@ export interface Habit {
   /** Target completions per week (weekly) or per month (monthly). Daily habits use 1. */
   target_count: number
   sub_habits: string[]
-  /** Preferred time of day (HH:mm); used in the schedule stream for daily habits. */
+  /** Preferred time of day (HH:mm): one time for every preferred day. */
   default_time: string | null
+  /**
+   * Preferred days, 0 = Monday … 6 = Sunday; empty = any day. A planning preference only: the
+   * planner books weekly/monthly habits on these days first, and a daily habit's time is only
+   * reserved on them. Older habits may lack the field, so read it with preferredDays().
+   */
+  preferred_days?: number[]
   duration_min: number
   sort_order: number
   archived: boolean
-  /** "Just for fun" tracker: logged and streaked, but never counted toward the daily goal. */
-  is_extra?: boolean
   created_at: string
 }
 
@@ -30,80 +34,46 @@ export interface HabitLog {
   created_at: string
 }
 
-export interface Reflection {
-  id: string
-  user_id: string | null
-  date: string
-  score: number // 1..5
-  note: string
-}
-
-export interface Goal {
-  id: string
-  user_id: string | null
-  title: string
-  target_date: string | null
-  done: boolean
-  linked_habit_ids: string[]
-  sort_order: number
-  created_at: string
-}
-
-export interface GoalTask {
-  id: string
-  user_id: string | null
-  goal_id: string
-  title: string
-  done: boolean
-  sort_order: number
-}
-
-export interface List {
-  id: string
-  user_id: string | null
-  name: string
-  sort_order: number
-  created_at: string
-}
-
-export interface ListItem {
-  id: string
-  user_id: string | null
-  list_id: string
-  text: string
-  done: boolean
-  sort_order: number
-}
-
 export type Difficulty = 'easy' | 'medium' | 'hard'
 
-/** School / work project whose estimated hours are scheduled as study sessions in the Planner. */
+/** One checklist step of a goal. */
+export interface GoalStep {
+  id: string
+  title: string
+  done: boolean
+}
+
+/**
+ * A goal (stored in the `projects` table): an optional due date, optional hours that are booked as
+ * one-hour sessions on the calendar, and optional steps to tick off.
+ */
 export interface Project {
   id: string
   user_id: string | null
   title: string
-  /** Course or module name (optional). */
+  /** Course or module name (unused in the UI, kept for old rows). */
   course: string
   due_date: string | null // YYYY-MM-DD
   difficulty: Difficulty
-  /** Total hours the project needs. Defaults from difficulty; editable. */
+  /** Total hours to book on the calendar; 0 = nothing to schedule. */
   hours_est: number
-  /** Length of one study session in minutes. */
+  /** Length of one session in minutes. */
   session_min: number
   color: string
   done: boolean
   notes: string
+  steps: GoalStep[]
   sort_order: number
   created_at: string
 }
 
-/** One-time to-do: checked off once, optionally due on a date and placed in the Planner. */
+/** One-time to-do: checked off once, optionally due on a date and planned on the calendar. */
 export interface Task {
   id: string
   user_id: string | null
   title: string
   due_date: string | null // YYYY-MM-DD
-  /** Time to book when the task is placed in the Planner. */
+  /** Time to book when the task is planned on the calendar. */
   duration_min: number
   done: boolean
   done_at: string | null // ISO
@@ -196,14 +166,15 @@ export interface MealPlan {
   id: string
   user_id: string | null
   recipe_id: string
-  week_start: string // YYYY-MM-DD (Monday)
+  /** Monday of the week whose Sunday is prep day (week_start + 6); the meals are eaten the week after. */
+  week_start: string // YYYY-MM-DD
   /** 0 = Monday … 6 = Sunday; null = anytime / prep day. */
   day: number | null
   servings: number
   cooked: boolean
 }
 
-/** Hours the planner must not fill automatically. A habit's own ideal time (e.g. gym at 12:00) is still allowed. */
+/** Hours auto-planning must not fill. A habit's own ideal time (e.g. gym at 12:00) is still allowed. */
 export interface WorkHours {
   enabled: boolean
   /** 0 = Monday … 6 = Sunday */
@@ -212,5 +183,5 @@ export interface WorkHours {
   end: string // HH:mm
 }
 
-export type Tab = 'today' | 'calendar' | 'lists' | 'planner' | 'settings'
+export type Tab = 'today' | 'calendar' | 'meals' | 'goals' | 'settings'
 export type Theme = 'light' | 'dark'

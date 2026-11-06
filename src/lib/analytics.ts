@@ -1,4 +1,4 @@
-import type { Habit, HabitLog, Reflection } from './types'
+import type { Habit, HabitLog } from './types'
 import { addDays, fromKey, subDays, ymd, weekStart, weekEnd, startOfMonth, endOfMonth } from './dates'
 
 export type LogIndex = Map<string, Map<string, HabitLog>> // date -> habitId -> log
@@ -16,12 +16,9 @@ export const indexLogs = (logs: HabitLog[]): LogIndex => {
 
 export const isDone = (idx: LogIndex, date: string, habitId: string) => !!idx.get(date)?.get(habitId)
 
-/** Habits that existed (and weren't archived) on a date. Includes extras; callers filter those as needed. */
+/** Habits that existed (and weren't archived) on a date. */
 export const activeHabitsOn = (habits: Habit[], date: string) =>
   habits.filter((h) => !h.archived && h.created_at.slice(0, 10) <= date)
-
-/** Same, but only habits that count toward the daily goal. */
-export const goalHabitsOn = (habits: Habit[], date: string) => activeHabitsOn(habits, date).filter((h) => !h.is_extra)
 
 /** Count of completions for a weekly/monthly habit within its current period containing `date`. */
 export const periodCompletions = (idx: LogIndex, habit: Habit, date: string) => {
@@ -35,10 +32,10 @@ export const periodCompletions = (idx: LogIndex, habit: Habit, date: string) => 
 
 /**
  * Daily success rate 0..1 for a date. Every daily habit counts; a weekly/monthly habit counts on the
- * days it was completed. Completing extra habits therefore never pushes a day past what was actually done.
+ * days it was completed.
  */
 export const dayRate = (habits: Habit[], idx: LogIndex, date: string): number | null => {
-  const active = goalHabitsOn(habits, date)
+  const active = activeHabitsOn(habits, date)
   const daily = active.filter((h) => h.frequency === 'daily')
   const doneDaily = daily.filter((h) => isDone(idx, date, h.id)).length
   const otherDone = active.filter((h) => h.frequency !== 'daily' && isDone(idx, date, h.id)).length
@@ -47,55 +44,75 @@ export const dayRate = (habits: Habit[], idx: LogIndex, date: string): number | 
   return (doneDaily + otherDone) / total
 }
 
-/** Current streak (consecutive days ending today or yesterday) for a habit. */
-export const habitStreak = (idx: LogIndex, habit: Habit): number => {
-  let cur = new Date()
-  let streak = 0
-  if (habit.frequency === 'daily') {
-    if (!isDone(idx, ymd(cur), habit.id)) cur = subDays(cur, 1)
-    while (isDone(idx, ymd(cur), habit.id)) { streak++; cur = subDays(cur, 1) }
-    return streak
-  }
-  // weekly/monthly: count consecutive periods where target was met
-  const stepBack = (d: Date) => (habit.frequency === 'weekly' ? subDays(weekStart(d), 1) : subDays(startOfMonth(d), 1))
-  let d = cur
-  if (periodCompletions(idx, habit, ymd(d)) < habit.target_count) d = stepBack(d)
-  while (periodCompletions(idx, habit, ymd(d)) >= habit.target_count) { streak++; d = stepBack(d) }
-  return streak
+/** Streak freezes: missed days per calendar week (Mon–Sun) that don't break a daily streak. */
+export const MAX_FREEZES_PER_WEEK = 1
+
+export interface StreakInfo {
+  /** Days (or weeks/months) completed in the current run. Frozen days don't add to it. */
+  streak: number
+  /** Missed days inside the run that were covered by a freeze (most recent first). */
+  frozen: string[]
+  /** Freezes used in the current calendar week (Mon–Sun). */
+  freezesThisWeek: number
 }
 
-/** "Perfect day" streak: consecutive days with all daily habits completed. */
-export const perfectDayStreak = (habits: Habit[], idx: LogIndex): number => {
-  let cur = new Date()
+/**
+ * Walks back from today counting completed days. A missed day is "frozen" (the streak survives
+ * but doesn't grow) while its week still has a freeze left; once a week has used
+ * MAX_FREEZES_PER_WEEK, its next miss ends the run. Today only counts once it is done.
+ */
+const dailyRun = (done: (key: string) => boolean, since: string): StreakInfo => {
+  let d = new Date()
+  if (!done(ymd(d))) d = subDays(d, 1)
   let streak = 0
-  const perfect = (d: Date) => (dayRate(habits, idx, ymd(d)) ?? 0) >= 1
-  if (!perfect(cur)) cur = subDays(cur, 1)
-  while (perfect(cur)) { streak++; cur = subDays(cur, 1) }
-  return streak
+  let lastWasMiss = false
+  const frozen: string[] = []
+  const perWeek = new Map<string, number>()
+  for (let guard = 0; guard < 3660; guard++, d = subDays(d, 1)) {
+    const k = ymd(d)
+    if (k < since) break
+    if (done(k)) { streak++; lastWasMiss = false; continue }
+    const wk = ymd(weekStart(d))
+    if ((perWeek.get(wk) ?? 0) >= MAX_FREEZES_PER_WEEK) break
+    perWeek.set(wk, (perWeek.get(wk) ?? 0) + 1)
+    frozen.push(k)
+    lastWasMiss = true
+  }
+  // The run ended right after a miss: that miss is the edge of the run, so no freeze was spent on it.
+  if (lastWasMiss) frozen.pop()
+  if (streak === 0) frozen.length = 0
+  const thisWeek = ymd(weekStart(new Date()))
+  return { streak, frozen, freezesThisWeek: frozen.filter((k) => k >= thisWeek).length }
 }
+
+/** Current streak with freeze details. Weekly/monthly habits count whole periods and have no freezes. */
+export const habitStreakInfo = (idx: LogIndex, habit: Habit): StreakInfo => {
+  if (habit.frequency === 'daily') return dailyRun((k) => isDone(idx, k, habit.id), habit.created_at.slice(0, 10))
+  // weekly/monthly: count consecutive periods where target was met
+  const stepBack = (d: Date) => (habit.frequency === 'weekly' ? subDays(weekStart(d), 1) : subDays(startOfMonth(d), 1))
+  let d = new Date()
+  let streak = 0
+  if (periodCompletions(idx, habit, ymd(d)) < habit.target_count) d = stepBack(d)
+  while (periodCompletions(idx, habit, ymd(d)) >= habit.target_count) { streak++; d = stepBack(d) }
+  return { streak, frozen: [], freezesThisWeek: 0 }
+}
+
+/** Current streak (with freezes) for a habit. */
+export const habitStreak = (idx: LogIndex, habit: Habit): number => habitStreakInfo(idx, habit).streak
+
+/** "Perfect day" streak (with freezes): days with every daily habit completed. */
+export const perfectDayInfo = (habits: Habit[], idx: LogIndex): StreakInfo => {
+  const since = habits.filter((h) => !h.archived).map((h) => h.created_at.slice(0, 10)).sort()[0]
+  if (!since) return { streak: 0, frozen: [], freezesThisWeek: 0 }
+  return dailyRun((k) => (dayRate(habits, idx, k) ?? 0) >= 1, since)
+}
+export const perfectDayStreak = (habits: Habit[], idx: LogIndex): number => perfectDayInfo(habits, idx).streak
 
 export const monthCompletionRate = (habits: Habit[], idx: LogIndex, days: Date[]): number => {
   const today = ymd(new Date())
   const rates = days.map((d) => ymd(d)).filter((k) => k <= today).map((k) => dayRate(habits, idx, k)).filter((r): r is number => r !== null)
   if (!rates.length) return 0
   return rates.reduce((a, b) => a + b, 0) / rates.length
-}
-
-/** Pearson correlation between daily mood and daily completion rate. */
-export const moodCorrelation = (habits: Habit[], idx: LogIndex, reflections: Reflection[]) => {
-  const pairs = reflections
-    .map((r) => [r.score, dayRate(habits, idx, r.date)] as const)
-    .filter((p): p is readonly [number, number] => p[1] !== null)
-  if (pairs.length < 3) return { r: null as number | null, n: pairs.length, avgMoodGood: null as number | null, avgMoodBad: null as number | null }
-  const mx = pairs.reduce((a, p) => a + p[0], 0) / pairs.length
-  const my = pairs.reduce((a, p) => a + p[1], 0) / pairs.length
-  let num = 0, dx = 0, dy = 0
-  for (const [x, y] of pairs) { num += (x - mx) * (y - my); dx += (x - mx) ** 2; dy += (y - my) ** 2 }
-  const r = dx && dy ? num / Math.sqrt(dx * dy) : 0
-  const good = pairs.filter((p) => p[1] >= 0.75).map((p) => p[0])
-  const bad = pairs.filter((p) => p[1] < 0.5).map((p) => p[0])
-  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null)
-  return { r, n: pairs.length, avgMoodGood: avg(good), avgMoodBad: avg(bad) }
 }
 
 export const rateColor = (rate: number | null) => {
@@ -107,10 +124,3 @@ export const rateColor = (rate: number | null) => {
   return '#ef4444'
 }
 
-export const MOODS = [
-  { score: 1, emoji: '😞', label: 'Very bad' },
-  { score: 2, emoji: '😕', label: 'Bad' },
-  { score: 3, emoji: '😐', label: 'Okay' },
-  { score: 4, emoji: '🙂', label: 'Good' },
-  { score: 5, emoji: '🤩', label: 'Great' },
-]

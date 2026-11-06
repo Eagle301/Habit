@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Flame, Plus } from 'lucide-react'
 import { useStore, useActiveHabits } from '../store/useStore'
 import type { Habit } from '../lib/types'
-import { todayKey, format, fmtTime, combine, hhmm, fromKey, addDays, subDays, ymd } from '../lib/dates'
-import { indexLogs, isDone, habitStreak, periodCompletions, MOODS, dayRate, rateColor, activeHabitsOn } from '../lib/analytics'
-import { blockLook } from '../lib/projects'
+import { todayKey, format, fmtTime, fromKey, addDays, subDays, ymd } from '../lib/dates'
+import { indexLogs, isDone, habitStreak, periodCompletions, dayRate, rateColor, activeHabitsOn } from '../lib/analytics'
 import { ProgressRing } from '../components/ui/ProgressRing'
 import { Sheet } from '../components/ui/Sheet'
 import { Card, CheckCircle, Empty, Header, SectionTitle } from '../components/ui/Bits'
@@ -18,26 +17,15 @@ export function Today() {
   const allHabits = useActiveHabits()
   const logs = useStore((s) => s.logs)
   const blocks = useStore((s) => s.blocks)
-  const events = useStore((s) => s.events)
-  const reflections = useStore((s) => s.reflections)
-  const googleConnected = useStore((s) => s.googleConnected)
-  const loadEvents = useStore((s) => s.loadEvents)
-  const projects = useStore((s) => s.projects)
-  const tasks = useStore((s) => s.tasks)
-  const { toggleHabit, setReflection, setReflectionNote, scheduleBlock, syncBlocksToGoogle, showToast, setTab, toggleBlockDone } = useStore()
-  const [savingCal, setSavingCal] = useState(false)
-  const [routineOpen, setRoutineOpen] = useState(false)
+  const toggleHabit = useStore((s) => s.toggleHabit)
 
   const user = useStore((s) => s.user)
   const todayK = todayKey()
   const [date, setDate] = useState(todayK)
   const isToday = date === todayK
   const dateObj = fromKey(date)
-  const now = new Date()
   const [subFor, setSubFor] = useState<Habit | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
-
-  useEffect(() => { if (googleConnected) void loadEvents(dateObj, dateObj) }, [googleConnected, date]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const idx = useMemo(() => indexLogs(logs), [logs])
   // Only habits that existed on the selected day.
@@ -45,10 +33,8 @@ export function Today() {
   const dayBlocks = useMemo(() => blocks.filter((b) => b.date === date), [blocks, date])
   const blockHabitIds = new Set(dayBlocks.map((b) => b.habit_id))
 
-  const extras = habits.filter((h) => h.is_extra)
-  const goalHabits = habits.filter((h) => !h.is_extra)
-  const scheduled = goalHabits.filter((h) => h.frequency === 'daily' || blockHabitIds.has(h.id))
-  const flexible = goalHabits.filter((h) => h.frequency !== 'daily' && !blockHabitIds.has(h.id))
+  const scheduled = habits.filter((h) => h.frequency === 'daily' || blockHabitIds.has(h.id))
+  const flexible = habits.filter((h) => h.frequency !== 'daily' && !blockHabitIds.has(h.id))
   // Every habit listed counts towards the ring. A flexible habit whose weekly/monthly target is
   // already met (and wasn't done that day) is left out so it doesn't drag the day down.
   const counted = [
@@ -58,65 +44,9 @@ export function Today() {
   const doneCount = counted.filter((h) => isDone(idx, date, h.id)).length
   const progress = counted.length ? doneCount / counted.length : 0
 
-  const reflection = reflections.find((r) => r.date === date)
-  const [note, setNote] = useState(reflection?.note ?? '')
-  useEffect(() => { setNote(reflection?.note ?? '') }, [reflection?.id, date]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Schedule stream: our blocks + Google events for the selected day, merged & sorted.
-  const stream = useMemo(() => {
-    const items: { key: string; time: Date; end: Date; title: string; icon?: string; color?: string; source: 'habit' | 'project' | 'task' | 'google'; habitId?: string; blockId?: string; blockDone?: boolean; allDay?: boolean; calendar?: string }[] = []
-    for (const b of dayBlocks) {
-      const look = blockLook(b, habits, projects, tasks)
-      if (!look) continue
-      const t = combine(b.date, b.start_time)
-      items.push({ key: b.id, time: t, end: new Date(t.getTime() + b.duration_min * 60000), title: look.name, icon: look.icon, color: look.color, source: look.kind, habitId: look.kind === 'habit' ? b.habit_id ?? undefined : undefined, blockId: b.id, blockDone: !!b.done })
-    }
-    for (const h of habits) {
-      if (h.frequency === 'daily' && h.default_time && !blockHabitIds.has(h.id) && !h.is_extra) {
-        const t = combine(date, h.default_time)
-        items.push({ key: `d-${h.id}`, time: t, end: new Date(t.getTime() + h.duration_min * 60000), title: h.name, icon: h.icon, color: h.color, source: 'habit', habitId: h.id })
-      }
-    }
-    const blockIds = new Set(dayBlocks.map((b) => b.id))
-    for (const e of events) {
-      if (e.habitBlockId && blockIds.has(e.habitBlockId)) continue
-      const s = new Date(e.start)
-      if (e.allDay) {
-        // Multi-day all-day events cover [start, end) with an exclusive end date.
-        const sk = format(s, 'yyyy-MM-dd'), ek = format(new Date(e.end), 'yyyy-MM-dd')
-        if (date < sk || (date >= ek && date !== sk)) continue
-      } else if (format(s, 'yyyy-MM-dd') !== date) continue
-      items.push({ key: e.id, time: s, end: new Date(e.end), title: e.title, source: 'google', allDay: e.allDay, color: e.color, calendar: e.calendar })
-    }
-    return items.sort((a, b) => (a.allDay ? -1 : b.allDay ? 1 : a.time.getTime() - b.time.getTime()))
-  }, [dayBlocks, events, habits, projects, tasks, date]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const onTap = (h: Habit) => {
     if (h.sub_habits.length && !isDone(idx, date, h.id)) setSubFor(h)
     else toggleHabit(h.id, date)
-  }
-
-  /** Habit items in the stream that are not yet Google events: existing blocks without an event,
-   *  plus timed daily habits that have no block for this day at all. */
-  const unsavedHabitItems = stream.filter((it) => it.source !== 'google' && (it.key.startsWith('d-') || !dayBlocks.find((b) => b.id === it.key)?.google_event_id))
-  const saveDayToCalendar = async () => {
-    setSavingCal(true)
-    const ids: string[] = []
-    for (const it of stream) {
-      if (it.source === 'google') continue
-      if (it.key.startsWith('d-')) {
-        // timed daily habit without a block: create one (this also pushes it to Google)
-        const h = habits.find((x) => x.id === it.habitId)
-        if (h?.default_time) scheduleBlock(h.id, date, h.default_time, h.duration_min)
-      } else if (!dayBlocks.find((b) => b.id === it.key)?.google_event_id) {
-        ids.push(it.key)
-      }
-    }
-    const { ok, failed } = await syncBlocksToGoogle(ids)
-    setSavingCal(false)
-    const created = stream.filter((it) => it.key.startsWith('d-')).length
-    const total = ok + created
-    showToast(failed ? `${total} saved, ${failed} failed · see Settings` : total ? `${total} item${total === 1 ? '' : 's'} saved to Google Calendar` : 'Already in your calendar')
   }
 
   return (
@@ -143,8 +73,8 @@ export function Today() {
             {progress >= 1 && counted.length > 0 ? 'All done! 🎉' : doneCount === 0 ? (isToday ? 'Let’s get started' : 'Nothing logged') : 'Keep it going'}
           </div>
           <div className="text-2 text-sm mt-1">{doneCount} of {counted.length} habits done</div>
-          {goalHabits.length > 0 && (
-            <div className="text-3 text-xs mt-2 inline-flex items-center gap-1"><Flame size={14} className="text-orange-500" /> Best streak {Math.max(0, ...goalHabits.map((h) => habitStreak(idx, h)))} days</div>
+          {habits.length > 0 && (
+            <div className="text-3 text-xs mt-2 inline-flex items-center gap-1"><Flame size={14} className="text-orange-500" /> Best streak {Math.max(0, ...habits.map((h) => habitStreak(idx, h)))} days</div>
           )}
         </div>
       </Card>
@@ -183,85 +113,7 @@ export function Today() {
         </>
       )}
 
-      {extras.length > 0 && (
-        <>
-          <SectionTitle right={<span className="text-3 text-[11px]">not counted</span>}>🎈 Extras</SectionTitle>
-          <div className="flex flex-col gap-2">
-            {extras.map((h) => <HabitRow key={h.id} habit={h} done={isDone(idx, date, h.id)} sub={idx.get(date)?.get(h.id)?.sub_habit ?? null} streak={habitStreak(idx, h)} onTap={() => onTap(h)} periodInfo={h.frequency !== 'daily' ? `${periodCompletions(idx, h, date)}/${h.target_count} this ${h.frequency === 'weekly' ? 'week' : 'month'}` : undefined} />)}
-          </div>
-        </>
-      )}
-
       {isToday && <Todos />}
-
-      <SectionTitle>Day routine</SectionTitle>
-      <Card className="p-0 overflow-hidden">
-        <button className="w-full flex items-center gap-3 p-3 text-left" onClick={() => setRoutineOpen(!routineOpen)} aria-expanded={routineOpen}>
-          <div className="grow min-w-0">
-            <div className="font-semibold text-[15px]">{stream.length ? `${stream.length} item${stream.length === 1 ? '' : 's'}` : 'Nothing scheduled'}</div>
-            <div className="text-3 text-xs truncate">
-              {stream.length
-                ? stream.slice(0, 4).map((it) => `${it.allDay ? '' : hhmm(it.time) + ' '}${it.icon ?? ''}${it.icon ? '' : it.title.slice(0, 14)}`).join(' · ') + (stream.length > 4 ? ' …' : '')
-                : googleConnected ? (isToday ? 'A free day.' : 'Nothing on this day.') : 'Connect Google Calendar in Settings to see events here.'}
-            </div>
-          </div>
-          {googleConnected && unsavedHabitItems.length > 0 && !routineOpen && <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(99,102,241,0.18)' }}>{unsavedHabitItems.length} to save</span>}
-          <ChevronDown size={18} className="text-3 shrink-0 transition-transform" style={{ transform: routineOpen ? 'rotate(180deg)' : 'none' }} />
-        </button>
-        {routineOpen && (
-          <div className="px-2 pb-2 border-t hairline">
-            {stream.map((it) => {
-            const past = !it.allDay && it.end < now
-            const current = isToday && !it.allDay && it.time <= now && it.end > now
-            const done = it.habitId ? isDone(idx, date, it.habitId) : it.source === 'project' || it.source === 'task' ? !!it.blockDone : false
-            return (
-              <div key={it.key} className={`flex items-center gap-3 px-2 py-2.5 rounded-xl ${current ? 'bg-line' : ''}`} style={{ opacity: past && !current && isToday ? 0.55 : 1 }}>
-                <div className="w-16 shrink-0 text-xs font-semibold text-2">{it.allDay ? 'All day' : hhmm(it.time)}</div>
-                <div className="w-1 self-stretch rounded-full" style={{ background: it.color ?? '#4285F4' }} />
-                <div className="grow min-w-0">
-                  <div className={`font-medium truncate ${done ? 'line-through text-3' : ''}`}>{it.icon ? `${it.icon} ` : ''}{it.title}</div>
-                  <div className="text-3 text-xs">{it.source === 'google' ? it.calendar ?? 'Google Calendar' : `${it.source === 'project' ? 'Study session' : it.source === 'task' ? 'To-do' : 'Habit'}${dayBlocks.find((b) => b.id === it.key)?.google_event_id ? ' · 📅 in calendar' : ''}`}{!it.allDay ? ` · ${hhmm(it.time)}–${hhmm(it.end)}` : ''}</div>
-                </div>
-                {(it.habitId || it.source === 'project' || it.source === 'task') && (
-                  <button onClick={() => { if ((it.source === 'project' || it.source === 'task') && it.blockId) toggleBlockDone(it.blockId); else { const h = habits.find((x) => x.id === it.habitId); if (h) onTap(h) } }} aria-label="Toggle">
-                    <CheckCircle checked={done} color={it.color} size={26} />
-                  </button>
-                )}
-              </div>
-            )
-          })}
-            {stream.some((it) => it.source !== 'google') && (
-              <div className="pt-2 px-1">
-                {googleConnected
-                  ? <button className="btn btn-sm w-full" onClick={saveDayToCalendar} disabled={savingCal || unsavedHabitItems.length === 0}><CalendarPlus size={14} /> {savingCal ? 'Saving…' : unsavedHabitItems.length ? `Save in calendar (${unsavedHabitItems.length})` : 'Saved in calendar ✓'}</button>
-                  : <button className="btn btn-sm btn-ghost text-3 w-full" onClick={() => setTab('settings')}><CalendarPlus size={14} /> Connect Google Calendar to save</button>}
-              </div>
-            )}
-          </div>
-        )}
-      </Card>
-
-      <SectionTitle>{isToday ? 'How was today?' : `How was ${format(dateObj, 'EEEE')}?`}</SectionTitle>
-      <Card>
-        <div className="flex justify-between">
-          {MOODS.map((m) => {
-            const active = reflection?.score === m.score
-            return (
-              <button key={m.score} onClick={() => setReflection(date, m.score)} className="flex flex-col items-center gap-1 press" aria-label={m.label}>
-                <span className={`text-[32px] leading-none transition-transform duration-200 ${active ? 'scale-125' : 'grayscale opacity-60'}`}>{m.emoji}</span>
-                <span className="text-[10px] font-medium" style={{ color: active ? 'var(--text)' : 'var(--text-3)' }}>{m.label}</span>
-              </button>
-            )
-          })}
-        </div>
-        {reflection && (
-          <textarea
-            className="field mt-4 text-sm" rows={2} placeholder="A short note about the day (optional)"
-            value={note} onChange={(e) => setNote(e.target.value)}
-            onBlur={() => { if (note !== (reflection.note ?? '')) setReflectionNote(date, note) }}
-          />
-        )}
-      </Card>
 
       <Sheet open={!!subFor} onClose={() => setSubFor(null)} title={subFor ? `${subFor.icon} ${subFor.name}` : ''}>
         <p className="text-2 text-sm mb-3">What did you do{isToday ? '' : ` on ${format(dateObj, 'EEEE')}`}?</p>

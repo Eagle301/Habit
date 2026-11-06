@@ -1,21 +1,15 @@
 import { supabase } from './supabase'
-import type { Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Project, Recipe, Reflection, ScheduledBlock, Task } from './types'
+import type { Habit, HabitLog, MealPlan, Project, Recipe, ScheduledBlock, Task } from './types'
 
-export type Table =
-  | 'habits' | 'habit_logs' | 'reflections' | 'goals' | 'goal_tasks' | 'lists' | 'list_items' | 'scheduled_blocks'
-  | 'recipes' | 'meal_plans' | 'projects' | 'tasks'
+export type Table = 'habits' | 'habit_logs' | 'scheduled_blocks' | 'recipes' | 'meal_plans' | 'projects' | 'tasks'
 
 export interface CloudData {
   habits: Habit[]
   logs: HabitLog[]
-  reflections: Reflection[]
-  goals: Goal[]
-  goalTasks: GoalTask[]
-  lists: List[]
-  listItems: ListItem[]
   blocks: ScheduledBlock[]
   recipes: Recipe[]
   mealPlans: MealPlan[]
+  /** Goals (stored in the `projects` table). */
   projects: Project[]
   tasks: Task[]
 }
@@ -28,6 +22,13 @@ const kronanSyncMessage = (error: { code?: string; message?: string }) =>
   error.code === 'PGRST205'
     ? 'Krónan token is not synced to your account: the kronan_tokens table is missing. Run supabase/migrations/0005_kronan_tokens.sql in the Supabase SQL editor.'
     : `Krónan token sync failed: ${error.message ?? 'unknown error'}`
+
+/** Fills fields that older goal rows may not have. */
+export const normalizeProject = (p: Project): Project => ({
+  ...p,
+  hours_est: Number(p.hours_est) || 0,
+  steps: Array.isArray(p.steps) ? p.steps : [],
+})
 
 /** Fire-and-forget writes; the local store is the source of truth for the UI. */
 export const db = {
@@ -45,37 +46,27 @@ export const db = {
   },
   async loadAll(): Promise<CloudData | null> {
     if (!supabase) return null
-    const [h, l, r, g, gt, li, lit, b, rc, mp, pj, tk] = await Promise.all([
+    const [h, l, b, rc, mp, pj, tk] = await Promise.all([
       supabase.from('habits').select('*').order('sort_order'),
       supabase.from('habit_logs').select('*'),
-      supabase.from('reflections').select('*'),
-      supabase.from('goals').select('*').order('sort_order'),
-      supabase.from('goal_tasks').select('*').order('sort_order'),
-      supabase.from('lists').select('*').order('sort_order'),
-      supabase.from('list_items').select('*').order('sort_order'),
       supabase.from('scheduled_blocks').select('*'),
       supabase.from('recipes').select('*').order('created_at'),
       supabase.from('meal_plans').select('*'),
       supabase.from('projects').select('*').order('sort_order'),
       supabase.from('tasks').select('*').order('sort_order'),
     ])
-    const err = [h, l, r, g, gt, li, lit, b, rc, mp].find((x) => x.error)?.error
+    const err = [h, l, b, rc, mp].find((x) => x.error)?.error
     if (err) { console.error('[db] loadAll failed', err); return null }
     // Projects arrived in migration 0006: a missing table must not block everything else.
     if (pj.error) console.error('[db] loadAll projects failed (run supabase/migrations/0006_projects.sql)', pj.error)
     if (tk.error) console.error('[db] loadAll tasks failed (run supabase/migrations/0007_tasks.sql)', tk.error)
     return {
-      habits: (h.data ?? []) as Habit[],
+      habits: ((h.data ?? []) as Habit[]).map((x) => ({ ...x, preferred_days: x.preferred_days ?? [] })),
       logs: (l.data ?? []) as HabitLog[],
-      reflections: (r.data ?? []) as Reflection[],
-      goals: (g.data ?? []) as Goal[],
-      goalTasks: (gt.data ?? []) as GoalTask[],
-      lists: (li.data ?? []) as List[],
-      listItems: (lit.data ?? []) as ListItem[],
       blocks: (b.data ?? []) as ScheduledBlock[],
       recipes: (rc.data ?? []) as Recipe[],
       mealPlans: (mp.data ?? []) as MealPlan[],
-      projects: ((pj.data ?? []) as Project[]).map((p) => ({ ...p, hours_est: Number(p.hours_est) })),
+      projects: ((pj.data ?? []) as Project[]).map(normalizeProject),
       tasks: (tk.data ?? []) as Task[],
     }
   },
@@ -89,11 +80,6 @@ export const db = {
     }
     await step('habits', d.habits)
     await step('habit_logs', d.logs)
-    await step('reflections', d.reflections)
-    await step('goals', d.goals)
-    await step('goal_tasks', d.goalTasks)
-    await step('lists', d.lists)
-    await step('list_items', d.listItems)
     await step('projects', d.projects)
     await step('tasks', d.tasks)
     await step('scheduled_blocks', d.blocks)
@@ -124,7 +110,8 @@ export const db = {
     const { data } = await supabase.auth.getUser()
     const uid = data.user?.id
     if (!uid) return
-    for (const t of ['meal_plans', 'recipes', 'scheduled_blocks', 'tasks', 'projects', 'list_items', 'lists', 'goal_tasks', 'goals', 'reflections', 'habit_logs', 'habits'] as Table[]) {
+    // The tables of removed features (lists, old goals, day reflections) are cleared too while they still exist.
+    for (const t of ['meal_plans', 'recipes', 'scheduled_blocks', 'tasks', 'projects', 'list_items', 'lists', 'goal_tasks', 'goals', 'reflections', 'habit_logs', 'habits']) {
       await supabase.from(t).delete().eq('user_id', uid)
     }
   },

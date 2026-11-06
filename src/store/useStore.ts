@@ -2,16 +2,15 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
-  CalendarEvent, Goal, GoalTask, Habit, HabitLog, List, ListItem, MealPlan, Project, Recipe, Reflection, ScheduledBlock, Tab, Task, Theme, WorkHours,
+  CalendarEvent, GoalStep, Habit, HabitLog, MealPlan, Project, Recipe, ScheduledBlock, Tab, Task, Theme, WorkHours,
 } from '../lib/types'
 import { blockLook } from '../lib/projects'
 import { DEFAULT_TASK_MIN } from '../lib/tasks'
 import { uid } from '../lib/id'
-import { db, type CloudData } from '../lib/db'
+import { removePhoto } from '../lib/photos'
+import { db, normalizeProject, type CloudData } from '../lib/db'
 import { supabase } from '../lib/supabase'
 import * as google from '../lib/google'
-import * as kronan from '../lib/kronan'
-import type { RecipeIngredient } from '../lib/types'
 import { todayKey, weekStart, weekEnd, addDays, ymd } from '../lib/dates'
 
 export interface User {
@@ -25,15 +24,12 @@ export interface User {
 
 interface DataState extends CloudData {}
 
-export type ListsMode = 'goals' | 'lists' | 'meals' | 'projects'
-
 interface UIState {
   user: User | null
   authReady: boolean
   theme: Theme
   tab: Tab
-  listsMode: ListsMode
-  /** Planner auto-placement keeps out of these hours (stored on this device). */
+  /** Auto-planning keeps out of these hours (stored on this device). */
   workHours: WorkHours
   /** Krónan API access token; cached locally and saved to the user's account when signed in. */
   kronanToken: string | null
@@ -64,35 +60,13 @@ interface Actions {
   deleteHabit: (id: string) => void
   toggleHabit: (habitId: string, date: string, subHabit?: string | null) => void
 
-  // reflections
-  setReflection: (date: string, score: number, note?: string) => void
-  setReflectionNote: (date: string, note: string) => void
-
-  // goals
-  addGoal: (title: string, target_date: string | null) => void
-  updateGoal: (id: string, patch: Partial<Goal>) => void
-  deleteGoal: (id: string) => void
-  addGoalTask: (goal_id: string, title: string) => void
-  toggleGoalTask: (id: string) => void
-  deleteGoalTask: (id: string) => void
-
-  // lists
-  addList: (name: string) => string
-  renameList: (id: string, name: string) => void
-  deleteList: (id: string) => void
-  addListItem: (list_id: string, text: string) => void
-  toggleListItem: (id: string) => void
-  deleteListItem: (id: string) => void
-  reorderListItems: (list_id: string, ids: string[]) => void
-  clearCompleted: (list_id: string) => void
-
-  // projects
+  // goals (stored as projects)
   addProject: (p: Omit<Project, 'id' | 'user_id' | 'created_at' | 'sort_order'>) => string
   updateProject: (id: string, patch: Partial<Project>) => void
-  /** Removes the project and all of its study sessions (and their calendar events). */
+  /** Removes the goal and all of its sessions (and their calendar events). */
   deleteProject: (id: string) => void
   scheduleProjectBlock: (project_id: string, date: string, start_time: string, duration_min: number) => ScheduledBlock
-  /** Tick a project study session or a planned task off (or back on). */
+  /** Tick a goal session or a planned task off (or back on). */
   toggleBlockDone: (id: string) => void
 
   // one-time tasks
@@ -101,10 +75,10 @@ interface Actions {
   toggleTask: (id: string) => void
   /** Removes the task and its planned block (and calendar event). */
   deleteTask: (id: string) => void
-  /** Puts the task in the Planner. A task has at most one block, so an existing one is moved. */
+  /** Plans the task on the calendar. A task has at most one block, so an existing one is moved. */
   scheduleTaskBlock: (task_id: string, date: string, start_time: string) => void
 
-  // planner
+  // planning
   scheduleBlock: (habit_id: string, date: string, start_time: string, duration_min?: number) => ScheduledBlock
   moveBlock: (id: string, date: string, start_time: string) => void
   deleteBlock: (id: string) => void
@@ -112,7 +86,6 @@ interface Actions {
   clearBlocks: (dates: string[]) => number
 
   // meals
-  setListsMode: (m: ListsMode) => void
   setKronanToken: (t: string | null) => void
   addRecipe: (r: Omit<Recipe, 'id' | 'user_id' | 'created_at'>) => string
   updateRecipe: (id: string, patch: Partial<Recipe>) => void
@@ -120,8 +93,6 @@ interface Actions {
   planMeal: (recipe_id: string, week_start: string, day: number | null, servings?: number) => void
   updateMealPlan: (id: string, patch: Partial<MealPlan>) => void
   unplanMeal: (id: string) => void
-  /** Adds the ingredients of the given recipes to the "Groceries" list (created if missing). Returns items added. */
-  addIngredientsToGroceries: (plans: { recipe_id: string; servings: number }[]) => number
   /** Ensures a weekly "Meal prep" habit exists and schedules it on the Sunday of the given week. */
   scheduleMealPrep: (week_start: string, time?: string) => void
 
@@ -138,8 +109,7 @@ export type Store = DataState & UIState & Actions
 const now = () => new Date().toISOString()
 
 const emptyData: CloudData = {
-  habits: [], logs: [], reflections: [], goals: [], goalTasks: [], lists: [], listItems: [], blocks: [],
-  recipes: [], mealPlans: [], projects: [], tasks: [],
+  habits: [], logs: [], blocks: [], recipes: [], mealPlans: [], projects: [], tasks: [],
 }
 
 export const DEFAULT_WORK_HOURS: WorkHours = { enabled: true, days: [0, 1, 2, 3, 4], start: '08:00', end: '16:00' }
@@ -168,7 +138,6 @@ export const useStore = create<Store>()(
         authReady: !supabase,
         theme: initialTheme(),
         tab: 'today',
-        listsMode: 'goals',
         workHours: DEFAULT_WORK_HOURS,
         kronanToken: null,
         kronanSyncError: null,
@@ -200,15 +169,13 @@ export const useStore = create<Store>()(
           if (saved.token) set({ kronanToken: saved.token })
           else if (!saved.error && local.kronanToken) void db.saveKronanToken(local.kronanToken).then((err) => set({ kronanSyncError: err }))
           const cloudEmpty = Object.values(cloud).every((arr) => arr.length === 0)
-          const localHasData = local.habits.length > 0 || local.lists.length > 0 || local.goals.length > 0 || local.tasks.length > 0
+          const localHasData = local.habits.length > 0 || local.projects.length > 0 || local.tasks.length > 0
           if (cloudEmpty && localHasData) {
             // First sign-in on a device that already has local data: migrate it up.
             const u = uidOf()
             const stamp = <T extends { user_id: string | null }>(rows: T[]) => rows.map((r) => ({ ...r, user_id: u }))
             const migrated: CloudData = {
-              habits: stamp(local.habits), logs: stamp(local.logs), reflections: stamp(local.reflections),
-              goals: stamp(local.goals), goalTasks: stamp(local.goalTasks), lists: stamp(local.lists),
-              listItems: stamp(local.listItems), blocks: stamp(local.blocks),
+              habits: stamp(local.habits), logs: stamp(local.logs), blocks: stamp(local.blocks),
               recipes: stamp(local.recipes), mealPlans: stamp(local.mealPlans), projects: stamp(local.projects), tasks: stamp(local.tasks),
             }
             set({ ...migrated })
@@ -235,10 +202,17 @@ export const useStore = create<Store>()(
           db.upsert('habits', habit)
         },
         updateHabit: (id, patch) => {
+          const before = get().habits.find((h) => h.id === id)
           const habits = get().habits.map((h) => (h.id === id ? { ...h, ...patch } : h))
           set({ habits })
           const row = habits.find((h) => h.id === id)
-          if (row) db.upsert('habits', row)
+          if (!row) return
+          db.upsert('habits', row)
+          // A new name or icon should reach the Google events of its upcoming planned sessions.
+          if (get().googleConnected && before && (before.name !== row.name || before.icon !== row.icon)) {
+            const today = todayKey()
+            for (const b of get().blocks) if (b.habit_id === id && b.date >= today) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
+          }
         },
         reorderHabits: (ids) => {
           const byId = new Map(get().habits.map((h) => [h.id, h]))
@@ -252,7 +226,6 @@ export const useStore = create<Store>()(
             habits: get().habits.filter((h) => h.id !== id),
             logs: get().logs.filter((l) => l.habit_id !== id),
             blocks: get().blocks.filter((b) => b.habit_id !== id),
-            goals: get().goals.map((g) => ({ ...g, linked_habit_ids: g.linked_habit_ids.filter((x) => x !== id) })),
           })
           db.remove('habits', id) // cascades in Postgres
         },
@@ -277,99 +250,7 @@ export const useStore = create<Store>()(
           db.upsert('habit_logs', log)
         },
 
-        // ---------------- reflections ----------------
-        setReflection: (date, score, note) => {
-          const existing = get().reflections.find((r) => r.date === date)
-          const r: Reflection = { id: existing?.id ?? uid(), user_id: uidOf(), date, score, note: note ?? existing?.note ?? '' }
-          set({ reflections: [...get().reflections.filter((x) => x.id !== r.id), r] })
-          db.upsert('reflections', r)
-        },
-        setReflectionNote: (date, note) => {
-          const existing = get().reflections.find((r) => r.date === date)
-          if (!existing) return
-          const r = { ...existing, note }
-          set({ reflections: get().reflections.map((x) => (x.id === r.id ? r : x)) })
-          db.upsert('reflections', r)
-        },
-
-        // ---------------- goals ----------------
-        addGoal: (title, target_date) => {
-          const g: Goal = { id: uid(), user_id: uidOf(), title, target_date, done: false, linked_habit_ids: [], sort_order: get().goals.length, created_at: now() }
-          set({ goals: [...get().goals, g] })
-          db.upsert('goals', g)
-        },
-        updateGoal: (id, patch) => {
-          const goals = get().goals.map((g) => (g.id === id ? { ...g, ...patch } : g))
-          set({ goals })
-          const row = goals.find((g) => g.id === id)
-          if (row) db.upsert('goals', row)
-        },
-        deleteGoal: (id) => {
-          set({ goals: get().goals.filter((g) => g.id !== id), goalTasks: get().goalTasks.filter((t) => t.goal_id !== id) })
-          db.remove('goals', id)
-        },
-        addGoalTask: (goal_id, title) => {
-          const t: GoalTask = { id: uid(), user_id: uidOf(), goal_id, title, done: false, sort_order: get().goalTasks.filter((x) => x.goal_id === goal_id).length }
-          set({ goalTasks: [...get().goalTasks, t] })
-          db.upsert('goal_tasks', t)
-        },
-        toggleGoalTask: (id) => {
-          const goalTasks = get().goalTasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
-          set({ goalTasks })
-          const row = goalTasks.find((t) => t.id === id)
-          if (row) db.upsert('goal_tasks', row)
-        },
-        deleteGoalTask: (id) => {
-          set({ goalTasks: get().goalTasks.filter((t) => t.id !== id) })
-          db.remove('goal_tasks', id)
-        },
-
-        // ---------------- lists ----------------
-        addList: (name) => {
-          const l: List = { id: uid(), user_id: uidOf(), name, sort_order: get().lists.length, created_at: now() }
-          set({ lists: [...get().lists, l] })
-          db.upsert('lists', l)
-          return l.id
-        },
-        renameList: (id, name) => {
-          const lists = get().lists.map((l) => (l.id === id ? { ...l, name } : l))
-          set({ lists })
-          const row = lists.find((l) => l.id === id)
-          if (row) db.upsert('lists', row)
-        },
-        deleteList: (id) => {
-          set({ lists: get().lists.filter((l) => l.id !== id), listItems: get().listItems.filter((i) => i.list_id !== id) })
-          db.remove('lists', id)
-        },
-        addListItem: (list_id, text) => {
-          const item: ListItem = { id: uid(), user_id: uidOf(), list_id, text, done: false, sort_order: get().listItems.filter((i) => i.list_id === list_id).length }
-          set({ listItems: [...get().listItems, item] })
-          db.upsert('list_items', item)
-        },
-        toggleListItem: (id) => {
-          const listItems = get().listItems.map((i) => (i.id === id ? { ...i, done: !i.done } : i))
-          set({ listItems })
-          const row = listItems.find((i) => i.id === id)
-          if (row) db.upsert('list_items', row)
-        },
-        deleteListItem: (id) => {
-          set({ listItems: get().listItems.filter((i) => i.id !== id) })
-          db.remove('list_items', id)
-        },
-        reorderListItems: (list_id, ids) => {
-          const byId = new Map(get().listItems.map((i) => [i.id, i]))
-          const ordered = ids.map((id, i) => ({ ...byId.get(id)!, sort_order: i }))
-          const others = get().listItems.filter((i) => i.list_id !== list_id)
-          set({ listItems: [...others, ...ordered] })
-          db.upsert('list_items', ordered)
-        },
-        clearCompleted: (list_id) => {
-          const gone = get().listItems.filter((i) => i.list_id === list_id && i.done).map((i) => i.id)
-          set({ listItems: get().listItems.filter((i) => !gone.includes(i.id)) })
-          db.remove('list_items', gone)
-        },
-
-        // ---------------- projects ----------------
+        // ---------------- goals (projects) ----------------
         addProject: (p) => {
           const project: Project = { ...p, id: uid(), user_id: uidOf(), created_at: now(), sort_order: get().projects.length }
           set({ projects: [...get().projects, project] })
@@ -444,7 +325,7 @@ export const useStore = create<Store>()(
           if (!cur) return
           const done = !cur.done
           const tasks = get().tasks.map((t) => (t.id === id ? { ...t, done, done_at: done ? now() : null } : t))
-          // A planned block mirrors its task so the Planner shows it struck through.
+          // A planned block mirrors its task so the calendar shows it struck through.
           const blocks = get().blocks.map((b) => (b.task_id === id ? { ...b, done } : b))
           set({ tasks, blocks })
           db.upsert('tasks', tasks.find((t) => t.id === id)!)
@@ -471,7 +352,7 @@ export const useStore = create<Store>()(
           if (get().googleConnected) void get().syncBlockToGoogle(b).catch(() => { /* surfaced via googleError */ })
         },
 
-        // ---------------- planner ----------------
+        // ---------------- planning ----------------
         scheduleBlock: (habit_id, date, start_time, duration_min) => {
           const habit = get().habits.find((h) => h.id === habit_id)
           const b: ScheduledBlock = {
@@ -514,7 +395,6 @@ export const useStore = create<Store>()(
         },
 
         // ---------------- meals ----------------
-        setListsMode: (listsMode) => set({ listsMode }),
         setKronanToken: (kronanToken) => {
           set({ kronanToken })
           if (get().user) void db.saveKronanToken(kronanToken).then((err) => set({ kronanSyncError: err }))
@@ -532,6 +412,7 @@ export const useStore = create<Store>()(
           if (row) db.upsert('recipes', row)
         },
         deleteRecipe: (id) => {
+          removePhoto(get().recipes.find((r) => r.id === id)?.image)
           set({ recipes: get().recipes.filter((r) => r.id !== id), mealPlans: get().mealPlans.filter((m) => m.recipe_id !== id) })
           db.remove('recipes', id)
         },
@@ -551,44 +432,10 @@ export const useStore = create<Store>()(
           set({ mealPlans: get().mealPlans.filter((m) => m.id !== id) })
           db.remove('meal_plans', id)
         },
-        addIngredientsToGroceries: (plans) => {
-          const { recipes, lists } = get()
-          // Merge identical ingredients across recipes (used amounts scaled to the planned servings),
-          // then round each up to whole packages.
-          const merged = new Map<string, { ing: RecipeIngredient; amount: number }>()
-          for (const p of plans) {
-            const r = recipes.find((x) => x.id === p.recipe_id)
-            if (!r) continue
-            const scale = p.servings / Math.max(1, r.servings)
-            for (const raw of r.ingredients) {
-              const ing = kronan.normalizeIngredient(raw)
-              const key = ing.sku ?? `${ing.name.toLowerCase()}|${ing.unit}`
-              const cur = merged.get(key)
-              if (cur) cur.amount += ing.qty * scale
-              else merged.set(key, { ing, amount: ing.qty * scale })
-            }
-          }
-          if (!merged.size) return 0
-          let list = lists.find((l) => l.name.trim().toLowerCase() === 'groceries')
-          let listId = list?.id
-          if (!listId) listId = get().addList('Groceries')
-          const existing = new Set(get().listItems.filter((i) => i.list_id === listId).map((i) => i.text.toLowerCase()))
-          let added = 0
-          for (const { ing, amount } of merged.values()) {
-            const scaled = { ...ing, qty: amount }
-            const packs = kronan.packsToBuy(scaled)
-            if (!packs) continue
-            const text = `${kronan.buyLabel(scaled)} ${ing.name}${ing.price ? ` · ${packs * ing.price} kr` : ''}`
-            if (existing.has(text.toLowerCase())) continue
-            get().addListItem(listId, text)
-            added++
-          }
-          return added
-        },
         scheduleMealPrep: (week_start, time = '14:00') => {
           let habit = get().habits.find((h) => h.name.toLowerCase() === 'meal prep')
           if (!habit) {
-            get().addHabit({ name: 'Meal prep', icon: '🥗', color: '#22c55e', frequency: 'weekly', target_count: 1, sub_habits: [], default_time: time, duration_min: 90, archived: false, is_extra: false })
+            get().addHabit({ name: 'Meal prep', icon: '🥗', color: '#22c55e', frequency: 'weekly', target_count: 1, sub_habits: [], default_time: time, preferred_days: [6], duration_min: 90, archived: false })
             habit = get().habits.find((h) => h.name.toLowerCase() === 'meal prep')
           }
           if (!habit) return
@@ -608,7 +455,7 @@ export const useStore = create<Store>()(
           const range = { from: ymd(from), to: ymd(to) }
           const cur = get().eventsRange
           if (!force && cur && cur.from <= range.from && cur.to >= range.to) return
-          // Always fetch a generous window: this week - 1 .. + 5 weeks so Today/Planner share the cache.
+          // Always fetch a generous window: this week - 1 .. + 5 weeks so Today/Calendar share the cache.
           const wFrom = addDays(weekStart(from), -7)
           const wTo = addDays(weekEnd(to), 35)
           set({ eventsLoading: true })
@@ -657,17 +504,40 @@ export const useStore = create<Store>()(
     },
     {
       name: 'habits-store',
-      version: 1,
+      version: 2,
+      migrate: (persisted, version) => (version < 2 ? migrateToV2(persisted as Record<string, unknown>) : persisted) as Store,
       partialize: (s) => ({
-        habits: s.habits, logs: s.logs, reflections: s.reflections, goals: s.goals, goalTasks: s.goalTasks,
-        lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
-        theme: s.theme, tab: s.tab, listsMode: s.listsMode, kronanToken: s.kronanToken, workHours: s.workHours,
+        habits: s.habits, logs: s.logs, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
+        theme: s.theme, tab: s.tab, kronanToken: s.kronanToken, workHours: s.workHours,
         googleConnected: s.googleConnected,
       }),
       onRehydrateStorage: () => (state) => { if (state) applyTheme(state.theme) },
     },
   ),
 )
+
+/**
+ * v1 → v2 (app simplification): old goals and their sub-tasks become goals with steps, "extra"
+ * trackers are archived, and lists / day reflections are dropped. Mirrors migration 0009 for
+ * local-only data; signed-in users get their data from the cloud anyway.
+ */
+function migrateToV2(s: Record<string, unknown>) {
+  type OldGoal = { id: string; user_id: string | null; title: string; target_date: string | null; done: boolean; sort_order: number; created_at: string }
+  type OldGoalTask = { id: string; goal_id: string; title: string; done: boolean; sort_order: number }
+  const goals = (s.goals as OldGoal[] | undefined) ?? []
+  const goalTasks = (s.goalTasks as OldGoalTask[] | undefined) ?? []
+  const projects = ((s.projects as Project[] | undefined) ?? []).map(normalizeProject)
+  const known = new Set(projects.map((p) => p.id))
+  const converted: Project[] = goals.filter((g) => !known.has(g.id)).map((g, i) => ({
+    id: g.id, user_id: g.user_id, title: g.title, course: '', due_date: g.target_date, difficulty: 'medium', hours_est: 0,
+    session_min: 60, color: '#6366f1', done: g.done, notes: '', sort_order: projects.length + i, created_at: g.created_at,
+    steps: goalTasks.filter((t) => t.goal_id === g.id).sort((a, b) => a.sort_order - b.sort_order).map((t): GoalStep => ({ id: t.id, title: t.title, done: t.done })),
+  }))
+  const habits = ((s.habits as (Habit & { is_extra?: boolean })[] | undefined) ?? []).map(({ is_extra, ...h }) => (is_extra ? { ...h, archived: true } : h))
+  const tab = s.tab === 'lists' ? 'goals' : s.tab === 'planner' ? 'calendar' : s.tab
+  const { goals: _g, goalTasks: _gt, lists: _l, listItems: _li, reflections: _r, listsMode: _m, ...rest } = s
+  return { ...rest, habits, projects: [...projects, ...converted], tab }
+}
 
 // ---------- selectors / helpers ----------
 /** Active habits sorted by order. Memoised so the selector never returns a fresh array reference. */

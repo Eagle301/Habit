@@ -65,6 +65,78 @@ export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boo
   )
 }
 
+/**
+ * Numeric input you can clear and retype freely. Every valid entry is passed on as you type; an empty
+ * or invalid entry is simply left in the box (the last valid value is kept) and, once you leave the
+ * field, marked with aria-invalid so a form can refuse to save. Use `invalidFields()` on save.
+ */
+export function NumberField({ value, onChange, onClear, min = 0, integer, className = '', style, ...rest }: {
+  /** null shows an empty box (only meaningful together with onClear). */
+  value: number | null; onChange: (v: number) => void
+  /** Makes the field optional: clearing it is valid and calls this. */
+  onClear?: () => void
+  min?: number; integer?: boolean; className?: string
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'min' | 'type'>) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const [focused, setFocused] = useState(false)
+  const parse = (t: string): number | null => {
+    const str = t.trim().replace(',', '.')
+    if (str === '') return null
+    const n = Number(str)
+    if (!Number.isFinite(n) || n < min) return null
+    return integer ? Math.round(n) : n
+  }
+  // A change from outside (e.g. the − / + buttons) replaces a leftover draft.
+  useEffect(() => { if (!focused) setDraft(null) }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+  const empty = (t: string) => t.trim() === ''
+  const invalid = draft !== null && parse(draft) === null && !(onClear && empty(draft))
+  return (
+    <input
+      {...rest}
+      type="text"
+      inputMode={integer ? 'numeric' : 'decimal'}
+      className={`field tabular-nums ${className}`}
+      style={invalid && !focused ? { ...style, outline: '2px solid #ef4444', outlineOffset: -2 } : style}
+      aria-invalid={invalid && !focused ? true : undefined}
+      data-invalid={invalid ? true : undefined}
+      value={draft ?? (value === null ? '' : String(Math.round(value * 100) / 100))}
+      onFocus={(e) => { setFocused(true); setDraft(e.target.value); e.target.select() }}
+      onChange={(e) => {
+        const t = e.target.value
+        setDraft(t)
+        const v = parse(t)
+        if (v !== null && v !== value) onChange(v)
+        else if (onClear && empty(t) && value !== null) onClear()
+      }}
+      onBlur={() => { setFocused(false); if (draft !== null && !invalid) setDraft(null) }}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+    />
+  )
+}
+
+/** Number fields inside `root` that hold an empty or invalid entry (see NumberField). */
+export const invalidFields = (root: HTMLElement | null) => [...(root?.querySelectorAll<HTMLInputElement>('input[data-invalid="true"]') ?? [])]
+
+/** − [number] + control. `step` snaps to the next/previous multiple, so 150 g with a 400 g step goes to 400 / 0. */
+export function Stepper({ value, onChange, step = 1, min = 0, integer, label, size = 'md' }: {
+  value: number; onChange: (v: number) => void; step?: number; min?: number; integer?: boolean; label: string; size?: 'sm' | 'md'
+}) {
+  const up = () => onChange(Math.max(min, (Math.floor(value / step + 1e-9) + 1) * step))
+  const down = () => onChange(Math.max(min, (Math.ceil(value / step - 1e-9) - 1) * step))
+  const h = size === 'sm' ? 'h-8' : 'h-10'
+  return (
+    <div className={`inline-flex items-stretch ${h} rounded-xl overflow-hidden shrink-0`} style={{ border: '1.5px solid var(--text-3)', background: 'var(--glass-strong)' }}>
+      <button type="button" className="w-8 font-bold text-lg press disabled:opacity-30" onClick={down} disabled={value <= min} aria-label={`Decrease ${label}`}>−</button>
+      <NumberField
+        value={value} onChange={onChange} min={min} integer={integer} aria-label={label}
+        className="!w-14 !px-1 !py-0 text-center font-bold"
+        style={{ borderRadius: 0, borderTop: 'none', borderBottom: 'none' }}
+      />
+      <button type="button" className="w-8 font-bold text-lg press" onClick={up} aria-label={`Increase ${label}`}>+</button>
+    </div>
+  )
+}
+
 export function Empty({ icon, title, hint }: { icon: string; title: string; hint?: string }) {
   return (
     <div className="glass p-6 text-center">

@@ -7,8 +7,8 @@ import { BottomNav } from './components/BottomNav'
 import { AuthScreen } from './components/AuthScreen'
 import { Today } from './tabs/Today'
 import { CalendarTab } from './tabs/Calendar'
-import { Lists } from './tabs/Lists'
-import { Planner } from './tabs/Planner'
+import { Meals } from './tabs/Meals'
+import { Goals } from './tabs/Goals'
 import { Settings } from './tabs/Settings'
 
 const LOCAL_KEY = 'habits-local-mode'
@@ -87,8 +87,8 @@ export default function App() {
         <motion.div key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
           {tab === 'today' && <Today />}
           {tab === 'calendar' && <CalendarTab />}
-          {tab === 'lists' && <Lists />}
-          {tab === 'planner' && <Planner />}
+          {tab === 'meals' && <Meals />}
+          {tab === 'goals' && <Goals />}
           {tab === 'settings' && <Settings onLeaveLocalMode={() => { try { localStorage.removeItem(LOCAL_KEY) } catch { /* ignore */ } setLocalMode(false) }} />}
         </motion.div>
       </main>

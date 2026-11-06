@@ -63,7 +63,7 @@ export function Todos() {
           )
         })}
         {open > 0 && (
-          <button className="btn btn-sm btn-ghost text-3 w-full mt-1" onClick={() => setTab('planner')}><CalendarClock size={14} /> Plan to-dos in the Planner</button>
+          <button className="btn btn-sm btn-ghost text-3 w-full mt-1" onClick={() => setTab('calendar')}><CalendarClock size={14} /> Plan to-dos in the Calendar</button>
         )}
       </Card>
 
@@ -100,7 +100,7 @@ function TaskEditor({ task, onDone }: { task: Task; onDone: () => void }) {
         </div>
       </label>
       <div className="flex flex-col gap-1">
-        <span className="text-2 text-sm">Time needed in the Planner</span>
+        <span className="text-2 text-sm">Time needed on the calendar</span>
         <Segment value={dur} options={TASK_DURATIONS.map((m) => ({ value: String(m), label: durLabel(m) }))} onChange={setDur} />
       </div>
       {b && (

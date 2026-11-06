@@ -65,6 +65,8 @@ return {
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
+          // Barcode decoder: only loaded when the scanner opens, so it must stay out of 'vendor'.
+          if (id.includes('@zxing')) return 'zxing'
           if (id.includes('@supabase')) return 'supabase'
           if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) return 'motion'
           if (id.includes('@dnd-kit')) return 'dnd'

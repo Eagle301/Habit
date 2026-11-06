@@ -43,7 +43,7 @@ export function localNow(timeZone: string, at = new Date()): { date: string; min
 
 /**
  * The reminder for `date`, or null when every daily habit is already done (or there are none).
- * Counts the same habits as the Today tab's daily goal: daily, not archived, not "extra".
+ * Counts the same habits as the Today tab's daily goal: daily and not archived.
  */
 export async function buildReminder(admin: SupabaseClient, userId: string, date: string): Promise<PushPayload | null> {
   const { data: habits, error } = await admin
@@ -52,7 +52,6 @@ export async function buildReminder(admin: SupabaseClient, userId: string, date:
     .eq('user_id', userId)
     .eq('frequency', 'daily')
     .eq('archived', false)
-    .eq('is_extra', false)
     .order('sort_order')
   if (error) throw error
   if (!habits?.length) return null

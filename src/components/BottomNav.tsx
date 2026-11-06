@@ -4,8 +4,8 @@ import { useStore } from '../store/useStore'
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'today', label: 'Today', icon: '☀️' },
   { id: 'calendar', label: 'Calendar', icon: '📅' },
-  { id: 'lists', label: 'Lists', icon: '📝' },
-  { id: 'planner', label: 'Planner', icon: '🎯' },
+  { id: 'meals', label: 'Meals', icon: '🍲' },
+  { id: 'goals', label: 'Goals', icon: '🎯' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ]
 

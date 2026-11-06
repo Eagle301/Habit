@@ -113,6 +113,11 @@ export const listRecipes = (token: string, offset = 0) =>
 
 export const getRecipe = (token: string, slug: string) => kfetch<KRecipeDetail>(token, `recipes/${encodeURIComponent(slug)}/`)
 
+/** Product for a scanned barcode (EAN/UPC), or null when Krónan doesn't know it. */
+export const productByBarcode = (token: string, barcode: string) =>
+  kfetch<KProductDetail>(token, `products/barcode/${encodeURIComponent(barcode)}/`)
+    .catch((e) => { if (e instanceof KronanError && e.status === 404) return null; throw e })
+
 /** Batch product details (nutrition, package size). Up to 100 SKUs per call. */
 export async function getProductDetails(token: string, skus: string[]): Promise<Map<string, KProductDetail>> {
   const out = new Map<string, KProductDetail>()
@@ -253,6 +258,7 @@ export const packsToBuy = (i: RecipeIngredient, scale = 1): number => {
   return 1
 }
 
+/** Cost of an ingredient line: whole packages to buy × price. */
 export const lineCost = (i: RecipeIngredient, scale = 1) => packsToBuy(i, scale) * (i.price || 0)
 
 /** Label for the amount to buy, e.g. "2 × 400 g" or "3 stk". */

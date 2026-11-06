@@ -8,9 +8,10 @@ import type { Habit } from '../lib/types'
 import { supabase, hasSupabase } from '../lib/supabase'
 import { CALENDAR_SCOPE, clearGoogleCache } from '../lib/google'
 import * as kronan from '../lib/kronan'
-import { db, type CloudData } from '../lib/db'
+import { db, normalizeProject, type CloudData } from '../lib/db'
 import { Card, Header, SectionTitle, Toggle } from '../components/ui/Bits'
-import { HabitEditor } from '../components/HabitEditor'
+import { HabitEditor, whenLabel } from '../components/HabitEditor'
+import { preferredDays } from '../lib/planning'
 import { ReminderCard } from '../components/ReminderCard'
 
 export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void }) {
@@ -96,9 +97,8 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
   // ---------- Data ----------
   const exportData = () => {
     const data: CloudData & { exported_at: string; version: number } = {
-      version: 1, exported_at: new Date().toISOString(),
-      habits: s.habits, logs: s.logs, reflections: s.reflections, goals: s.goals, goalTasks: s.goalTasks,
-      lists: s.lists, listItems: s.listItems, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
+      version: 2, exported_at: new Date().toISOString(),
+      habits: s.habits, logs: s.logs, blocks: s.blocks, recipes: s.recipes, mealPlans: s.mealPlans, projects: s.projects, tasks: s.tasks,
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
@@ -113,17 +113,14 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
       const uid = s.user?.id ?? null
       const stamp = <T extends { user_id: string | null }>(rows?: T[]) => (rows ?? []).map((r) => ({ ...r, user_id: uid }))
       const data: CloudData = {
-        habits: stamp(raw.habits), logs: stamp(raw.logs), reflections: stamp(raw.reflections), goals: stamp(raw.goals),
-        goalTasks: stamp(raw.goalTasks), lists: stamp(raw.lists), listItems: stamp(raw.listItems), blocks: stamp(raw.blocks),
-        recipes: stamp(raw.recipes), mealPlans: stamp(raw.mealPlans), projects: stamp(raw.projects), tasks: stamp(raw.tasks),
+        habits: stamp(raw.habits), logs: stamp(raw.logs), blocks: stamp(raw.blocks),
+        recipes: stamp(raw.recipes), mealPlans: stamp(raw.mealPlans), projects: stamp(raw.projects).map(normalizeProject), tasks: stamp(raw.tasks),
       }
-      if (!confirm(`Import ${data.habits.length} habits, ${data.logs.length} logs, ${data.lists.length} lists? This merges into your current data.`)) return
+      if (!confirm(`Import ${data.habits.length} habits, ${data.logs.length} logs, ${data.projects.length} goals? This merges into your current data.`)) return
       // merge by id
       const merge = <T extends { id: string }>(cur: T[], inc: T[]) => { const m = new Map(cur.map((x) => [x.id, x])); for (const x of inc) m.set(x.id, x); return [...m.values()] }
       const merged: CloudData = {
-        habits: merge(s.habits, data.habits), logs: merge(s.logs, data.logs), reflections: merge(s.reflections, data.reflections),
-        goals: merge(s.goals, data.goals), goalTasks: merge(s.goalTasks, data.goalTasks), lists: merge(s.lists, data.lists),
-        listItems: merge(s.listItems, data.listItems), blocks: merge(s.blocks, data.blocks),
+        habits: merge(s.habits, data.habits), logs: merge(s.logs, data.logs), blocks: merge(s.blocks, data.blocks),
         recipes: merge(s.recipes, data.recipes), mealPlans: merge(s.mealPlans, data.mealPlans), projects: merge(s.projects, data.projects), tasks: merge(s.tasks, data.tasks),
       }
       s.replaceAll(merged)
@@ -134,9 +131,9 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
     }
   }
   const wipe = async () => {
-    if (!confirm('Delete ALL habits, logs, goals and lists? This cannot be undone.')) return
+    if (!confirm('Delete ALL habits, logs, goals, to-dos and meals? This cannot be undone.')) return
     if (!confirm('Really delete everything?')) return
-    s.replaceAll({ habits: [], logs: [], reflections: [], goals: [], goalTasks: [], lists: [], listItems: [], blocks: [], recipes: [], mealPlans: [], projects: [], tasks: [] })
+    s.replaceAll({ habits: [], logs: [], blocks: [], recipes: [], mealPlans: [], projects: [], tasks: [] })
     if (s.user) await db.wipeAll()
     s.showToast('All data deleted')
   }
@@ -164,7 +161,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Briefcase size={20} />
-            <div><div className="font-semibold">Keep the planner out of work</div><div className="text-3 text-xs">Auto-fill and day drops avoid these hours. A habit with its own ideal time, like gym at 12:00, is still placed there.</div></div>
+            <div><div className="font-semibold">Keep planning out of work hours</div><div className="text-3 text-xs">Auto-fill and day drops avoid these hours. A habit with its own ideal time, like gym at 12:00, is still placed there.</div></div>
           </div>
           <Toggle on={s.workHours.enabled} onChange={(v) => s.setWorkHours({ enabled: v })} />
         </div>
@@ -195,7 +192,7 @@ export function Settings({ onLeaveLocalMode }: { onLeaveLocalMode: () => void })
           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: 'rgba(66,133,244,0.18)' }}>📅</div>
           <div className="grow">
             <div className="font-semibold">{s.googleConnected ? 'Connected' : 'Not connected'}</div>
-            <div className="text-3 text-xs">2-way sync: events show in Today &amp; Planner, planned habits are pushed to your primary calendar.</div>
+            <div className="text-3 text-xs">2-way sync: events show in Today &amp; Calendar, planned habits are pushed to your primary calendar.</div>
           </div>
         </div>
         {s.googleError && <div className="text-xs mt-3 p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444' }}>{s.googleError}</div>}
@@ -328,7 +325,7 @@ function HabitRowSortable({ habit, onEdit, onArchive }: { habit: Habit; onEdit: 
         <span className="text-xl w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${habit.color}22` }}>{habit.icon}</span>
         <div className="min-w-0">
           <div className="font-medium text-sm truncate">{habit.name}</div>
-          <div className="text-3 text-xs">{habit.is_extra ? '🎈 Extra · ' : ''}{habit.frequency === 'daily' ? 'Daily' : `${habit.target_count}× / ${habit.frequency === 'weekly' ? 'week' : 'month'}`}{habit.sub_habits.length ? ` · ${habit.sub_habits.length} options` : ''}</div>
+          <div className="text-3 text-xs">{habit.frequency === 'daily' ? 'Daily' : `${habit.target_count}× / ${habit.frequency === 'weekly' ? 'week' : 'month'}`}{preferredDays(habit).length || habit.default_time ? ` · ${whenLabel(preferredDays(habit), habit.default_time)}` : ''}{habit.sub_habits.length ? ` · ${habit.sub_habits.length} options` : ''}</div>
         </div>
       </button>
       <button className="btn btn-sm" onClick={onArchive} aria-label="Archive"><Archive size={14} /></button>

@@ -3,16 +3,16 @@ import type { Difficulty, Habit, Project, ScheduledBlock, Task } from './types'
 import { fromKey, todayKey } from './dates'
 import { TASK_COLOR, TASK_ICON } from './tasks'
 
-/** Difficulty → total hours of study, booked as one-hour sessions. */
+/** Effort → total hours booked on the calendar as one-hour sessions. */
 export const DIFFICULTY: Record<Difficulty, { label: string; hours: number }> = {
   easy: { label: 'Easy', hours: 2 },
   medium: { label: 'Medium', hours: 4 },
   hard: { label: 'Hard', hours: 6 },
 }
 export const DIFFICULTIES: Difficulty[] = ['easy', 'medium', 'hard']
-/** Every study session is one hour. */
+/** Every goal session is one hour. */
 export const SESSION_MIN = 60
-export const PROJECT_ICON = '🎓'
+export const PROJECT_ICON = '🎯'
 export const PROJECT_COLORS = ['#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#f97316', '#eab308', '#22c55e', '#14b8a6']
 
 export const projectBlocks = (blocks: ScheduledBlock[], projectId: string) => blocks.filter((b) => b.project_id === projectId)
@@ -80,3 +80,15 @@ export const blockLook = (b: ScheduledBlock, habits: Habit[], projects: Project[
 /** Open projects sorted by due date (soonest first, undated last). */
 export const sortProjects = (projects: Project[]) =>
   [...projects].sort((a, b) => Number(a.done) - Number(b.done) || (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.sort_order - b.sort_order)
+
+/**
+ * Overall progress of a goal, 0..1: the share of steps ticked off and/or of hours done. When a goal
+ * has both, each counts for half. A goal with neither is 0 until marked done.
+ */
+export const goalPct = (p: Project, blocks: ScheduledBlock[]): number => {
+  if (p.done) return 1
+  const parts: number[] = []
+  if (p.steps.length) parts.push(p.steps.filter((s) => s.done).length / p.steps.length)
+  if (p.hours_est > 0) parts.push(projectProgress(p, blocks).pct)
+  return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : 0
+}

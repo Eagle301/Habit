@@ -4,7 +4,7 @@ import { format, fromKey, todayKey } from './dates'
 
 export const TASK_ICON = '☑️'
 export const TASK_COLOR = '#14b8a6'
-/** Time choices when a task is placed in the Planner. */
+/** Time choices when a task is planned on the calendar. */
 export const TASK_DURATIONS = [15, 30, 60] as const
 export const DEFAULT_TASK_MIN = 30
 
