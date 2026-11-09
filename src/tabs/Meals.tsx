@@ -67,7 +67,7 @@ const shoppingList = (plans: MealPlan[], byId: Map<string, Recipe>) => {
   }
   return [...merged].map(([key, { ing, amount }]) => {
     const i = { ...ing, qty: amount }
-    return { key, sku: ing.sku, name: ing.name, label: kronan.buyLabel(i), cost: kronan.lineCost(i), packs: kronan.packsToBuy(i) }
+    return { key, sku: ing.sku, name: ing.name, label: kronan.buyLabel(i), cost: kronan.buyCost(i), packs: kronan.packsToBuy(i) }
   }).filter((x) => x.packs > 0).sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -956,7 +956,7 @@ function RecipeForm({ initial, onDone }: { initial?: Recipe; onDone: () => void 
                   <div className="grow min-w-0">
                     <div className="text-sm font-medium truncate">{i.name}</div>
                     <div className="text-3 text-[11px] truncate">
-                      {i.price ? `${kronan.buyLabel(i)} · ${isk(kronan.lineCost(i))}` : 'no price'}
+                      {i.price ? `${qtyLabel(i)} · ${isk(kronan.lineCost(i))}` : 'no price'}
                       {i.pack_g ? ` · ${i.pack_g} ${i.unit === 'ml' ? 'ml' : 'g'}/pack` : ''}
                     </div>
                   </div>

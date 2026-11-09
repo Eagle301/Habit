@@ -6,10 +6,7 @@ import { addDays, addMonths, format, fromKey, minutesToTime, monthDays, startOfM
 import { dayRate, habitStreakInfo, indexLogs, isDone, monthCompletionRate, perfectDayInfo, rateColor, activeHabitsOn, type LogIndex } from '../lib/analytics'
 import { blockLook, fmtHours, dueLabel } from '../lib/projects'
 import { taskDueLabel } from '../lib/tasks'
-import { autoFillWeek, dailyHabitSlots, eventsByDay, itemLook, placeItem, unplannedFor, workSegments, type PlanItem } from '../lib/planning'
-
-/** Work shows as a quiet grey item. */
-const WORK_STYLE = { background: 'rgba(148,163,184,0.14)', border: '1px solid rgba(148,163,184,0.35)', color: 'var(--text-2)' }
+import { autoFillWeek, dailyHabitSlots, eventsByDay, itemLook, placeItem, unplannedFor, type PlanItem } from '../lib/planning'
 import { Card, CheckCircle, Header, SectionTitle } from '../components/ui/Bits'
 import { Sheet } from '../components/ui/Sheet'
 
@@ -172,7 +169,7 @@ function MonthGrid({ days, selected, onSelect, habits, idx, blocks, byDay, googl
 
 /* ------------------------------ week view ------------------------------ */
 
-interface DayItem { key: string; start: number; minutes: number; icon?: string; label: string; color: string; kind: 'event' | 'block' | 'habit' | 'work'; done?: boolean }
+interface DayItem { key: string; start: number; minutes: number; icon?: string; label: string; color: string; kind: 'event' | 'block' | 'habit'; done?: boolean }
 
 /** Card height grows with duration (30 min ≈ 42 px, 1 h ≈ 54 px, 2 h ≈ 78 px), so longer items stand out. */
 const cardHeight = (minutes: number) => Math.min(140, 30 + Math.max(15, minutes) * 0.4)
@@ -183,7 +180,6 @@ function WeekGrid({ days, selected, onSelect, byDay, idx }: { days: Date[]; sele
   const habits = useStore((s) => s.habits)
   const projects = useStore((s) => s.projects)
   const tasks = useStore((s) => s.tasks)
-  useStore((s) => s.workHours) // re-render when work hours change; workSegments reads them from the store
   const today = todayKey()
 
   const columns = days.map((d, i) => {
@@ -202,7 +198,6 @@ function WeekGrid({ days, selected, onSelect, byDay, idx }: { days: Date[]; sele
         return [{ key: b.id, start: timeToMinutes(b.start_time), minutes: b.duration_min, icon: l.icon, label: l.name, color: l.color, kind: 'block' as const, done }]
       }),
       ...dailyHabitSlots(k, habits, blocks).map((x) => ({ key: `h-${x.habit.id}`, start: x.start, minutes: x.end - x.start, icon: x.habit.icon, label: x.habit.name, color: x.habit.color, kind: 'habit' as const, done: isDone(idx, k, x.habit.id) })),
-      ...workSegments(k).map(([ws, we], j) => ({ key: `w-${j}`, start: ws, minutes: we - ws, icon: '💼', label: 'Work', color: '#94a3b8', kind: 'work' as const })),
     ].sort((a, b) => a.start - b.start)
     return { k, d, dow: DOW[i], allDay: evts.filter((e) => e.allDay), items }
   })
@@ -231,13 +226,13 @@ function WeekGrid({ days, selected, onSelect, byDay, idx }: { days: Date[]; sele
             ))}
             {items.map((it) => (
               <div key={it.key} title={`${minutesToTime(it.start)} ${it.icon ? `${it.icon} ` : ''}${it.label}`} className="rounded px-1 py-0.5 overflow-hidden flex flex-col"
-                style={it.kind === 'work' ? { height: cardHeight(it.minutes), ...WORK_STYLE } : {
+                style={{
                   height: cardHeight(it.minutes),
                   background: it.kind === 'habit' ? 'transparent' : `${it.color}${it.kind === 'event' ? '40' : '55'}`,
                   ...(it.kind === 'habit' ? { border: `1px dashed ${it.color}` } : { borderLeft: `2px solid ${it.color}` }),
                   opacity: it.done ? 0.5 : 1,
                 }}>
-                <span className="text-[9px] font-bold tabular-nums leading-tight">{minutesToTime(it.start)}{it.kind === 'work' ? `–${minutesToTime(it.start + it.minutes)}` : ''}</span>
+                <span className="text-[9px] font-bold tabular-nums leading-tight">{minutesToTime(it.start)}</span>
                 <span className={`text-[9px] leading-tight hyphens-auto ${it.done ? 'line-through' : ''}`}>{it.icon ? `${it.icon} ` : ''}{it.label}</span>
               </div>
             ))}
@@ -250,7 +245,6 @@ function WeekGrid({ days, selected, onSelect, byDay, idx }: { days: Date[]; sele
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(99,102,241,0.4)', borderLeft: '2px solid #6366f1' }} /> planned</span>
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(66,133,244,0.3)', borderLeft: '2px solid #4285F4' }} /> calendar</span>
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={{ border: '1px dashed var(--text-3)' }} /> daily habit</span>
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm" style={WORK_STYLE} /> work</span>
         <span className="grow" />
         <span>taller = longer</span>
       </div>
@@ -267,7 +261,6 @@ function DayPanel({ date, idx, byDay }: { date: string; idx: LogIndex; byDay: Ma
   const projects = useStore((s) => s.projects)
   const tasks = useStore((s) => s.tasks)
   const { moveBlock, deleteBlock, clearBlocks, toggleBlockDone, showToast } = useStore()
-  useStore((s) => s.workHours) // re-render when work hours change
   const today = todayKey()
   const isPast = date < today
   const dayHabits = activeHabitsOn(allHabits, date)
@@ -280,9 +273,7 @@ function DayPanel({ date, idx, byDay }: { date: string; idx: LogIndex; byDay: Ma
   const schedule = [
     ...evts.filter((e) => !e.allDay).map((e) => ({ kind: 'event' as const, key: e.id, min: startMinOn(e, date), e })),
     ...dayBlocks.map((b) => ({ kind: 'block' as const, key: b.id, min: timeToMinutes(b.start_time), b })),
-    ...workSegments(date).map(([ws, we], j) => ({ kind: 'work' as const, key: `w-${j}`, min: ws, end: we })),
   ].sort((a, b) => a.min - b.min)
-  const hasPlans = schedule.some((it) => it.kind !== 'work')
   const clearDay = () => { if (confirm(`Remove all ${dayBlocks.length} planned items on this day?`)) showToast(`${plural(clearBlocks([date]), 'item')} removed`) }
 
   return (
@@ -308,31 +299,18 @@ function DayPanel({ date, idx, byDay }: { date: string; idx: LogIndex; byDay: Ma
 
       {schedule.length > 0 && (
         <div className="flex flex-col">
-          {schedule.map((it) => it.kind === 'work'
-            ? <WorkRow key={it.key} start={it.min} end={it.end} />
-            : it.kind === 'event'
+          {schedule.map((it) => it.kind === 'event'
             ? <EventRow key={it.key} e={it.e} date={date} />
             : <BlockRow key={it.key} b={it.b} done={blockDone(it.b, idx)} look={blockLook(it.b, allHabits, projects, tasks)} onMove={moveBlock} onDelete={deleteBlock} onToggle={toggleBlockDone} />)}
         </div>
       )}
-      {!hasPlans && <div className={`text-3 text-sm ${schedule.length ? 'mt-2' : ''}`}>{isPast ? 'Nothing was planned.' : 'Nothing planned yet. Tap “Plan” to add habits, goal sessions and to-dos.'}</div>}
+      {!schedule.length && <div className="text-3 text-sm">{isPast ? 'Nothing was planned.' : 'Nothing planned yet. Tap “Plan” to add habits, goal sessions and to-dos.'}</div>}
       {dayBlocks.length > 1 && !isPast && <button className="btn btn-sm btn-ghost text-3 w-full mt-2" onClick={clearDay}><Trash2 size={14} /> Clear day</button>}
     </Card>
   )
 }
 
 const blockDone = (b: ScheduledBlock, idx: LogIndex) => (b.habit_id ? isDone(idx, b.date, b.habit_id) : !!b.done)
-
-/** Work hours for the day, in grey; a gap means something planned moved work later. */
-function WorkRow({ start, end }: { start: number; end: number }) {
-  return (
-    <div className="flex items-center gap-2 py-1.5 border-b hairline last:border-b-0 text-3">
-      <span className="w-[6rem] shrink-0 text-xs font-semibold pl-2 tabular-nums">{minutesToTime(start)}</span>
-      <span className="w-1 self-stretch rounded-full" style={{ background: 'rgba(148,163,184,0.5)' }} />
-      <div className="grow min-w-0 text-sm">💼 Work <span className="text-[11px]">· until {minutesToTime(end)}</span></div>
-    </div>
-  )
-}
 
 function EventRow({ e, date }: { e: CalendarEvent; date: string }) {
   const color = e.color ?? '#4285F4'

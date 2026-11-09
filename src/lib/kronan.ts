@@ -258,8 +258,21 @@ export const packsToBuy = (i: RecipeIngredient, scale = 1): number => {
   return 1
 }
 
-/** Cost of an ingredient line: whole packages to buy × price. */
-export const lineCost = (i: RecipeIngredient, scale = 1) => packsToBuy(i, scale) * (i.price || 0)
+/**
+ * Cost of the amount actually used in the dish: 200 g from a 500 g pack costs 2/5 of the pack price.
+ * Pieces (stk) cost price × pieces; without a known pack size the whole pack is counted.
+ */
+export const lineCost = (i: RecipeIngredient, scale = 1): number => {
+  const n = normalizeIngredient(i)
+  const amount = n.qty * scale
+  if (amount <= 0 || !n.price) return 0
+  if (n.unit === 'stk') return amount * n.price
+  if (n.pack_g && n.pack_g > 0) return (amount / n.pack_g) * n.price
+  return n.price
+}
+
+/** What the shop charges: whole packages to buy × price. */
+export const buyCost = (i: RecipeIngredient, scale = 1) => packsToBuy(i, scale) * (i.price || 0)
 
 /** Label for the amount to buy, e.g. "2 × 400 g" or "3 stk". */
 export const buyLabel = (i: RecipeIngredient, scale = 1) => {
